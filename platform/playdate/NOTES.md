@@ -138,6 +138,98 @@ If the game runs slow:
   with 2 frames is too much. PM is natively 72Hz; either 60Hz (current) or
   50Hz emulation will look wrong but be playable.
 
+## Performance analysis — comparing to other ports (2026-05-02)
+
+Currently running well below native Pokémon Mini speed on device. The NDS
+port runs at full speed on a 67 MHz ARM9, so a 180 MHz Cortex-M7 should
+have plenty of headroom — the slowness is something the port is doing,
+not a hardware ceiling. What follows is a comparison against ports that
+hit native speed and a list of suspected bottlenecks ranked by severity.
+
+### What the fast ports do
+
+**NDS (`platform/nds/PokeMini_NDS.c`, `platform/nds/makefile:37`)** —
+runs full-speed on weaker hardware:
+- `CFLAGS += ... -DPERFORMANCE` (makefile:37). With `PERFORMANCE` defined,
+  `CommandLineInit` sets `synccycles = 64` (CommandLine.c:118). The NDS
+  port does **not** override it, so it runs with the full 64-cycle batch.
+- Uses **`Video_x2`** at 192×128 with a custom **8-bit paletted** variant
+  `PokeMini_Video2x2_8P` (PokeMini_NDS.c:36, 361). Output is one byte per
+  destination pixel — no per-pixel format conversion in the port.
+- Audio uses the Maxmod stream callback (PokeMini_NDS.c:210–214) calling
+  `MinxAudio_GenerateEmulatedS8` directly into the destination buffer.
+  Same `POKEMINI_GENSOUND` callback model the Playdate already uses.
+- Renders only when `LCDDirty` is set (PokeMini_NDS.c:424–427) — same
+  optimization the Playdate has.
+
+**Other small ports**: GCW uses `Video_x3` (288×192, 16-bit), BitBoy and
+nspire use `Video_x2`, PSP uses `Video_x2`/`Video_x4`. None of them
+override `synccycles`; they all rely on the `PERFORMANCE` default of 64.
+
+### Where the Playdate port is leaving cycles on the floor
+
+In rough order of suspected impact:
+
+**1. `synccycles = 16` is below the `PERFORMANCE` default of 64**
+(`PokeMini_Playdate.c:263`). Every sync exits the inner CPU loop, calls
+`MinxTimers_Sync()` and `MinxPRC_Sync()` (Hardware.c:55–57). At 16 vs 64
+that's roughly **4× more sync calls per frame**. (Earlier estimates of
+"3500×" were wrong — they confused `synccycles` with `POKEMINI_FRAME_CYC`,
+which is the total cycles per frame, not the sync granularity.) Cheap fix:
+bump to 64 and measure. UI clamps the upper bound to 512 in `PERFORMANCE`
+mode (UI.c:915), so 128 or 256 are also worth trying.
+
+**2. `render_screen` does scalar bit-packing on the CPU**
+(`PokeMini_Playdate.c:193–222`). Every refresh:
+- 64 rows × 12 bytes × 8 conditional ORs = **6144 compares + ORs** to
+  pack `LCDPixelsD` (1-byte-per-pixel) into 1-bpp.
+- Then 64 rows × 12 bytes × 3 (scale) × 3 (vertical repeat) = **6912
+  byte writes** through a 256-entry LUT into the framebuffer.
+
+The bit-packing loop is the suspicious part — eight branchy `if (src[i] == 0) byte |= 0x..` per byte. Two cheap rewrites worth trying (in order):
+
+- Branchless pack: `byte = ((src[0]==0)<<7) | ((src[1]==0)<<6) | ...` —
+  lets the compiler emit conditional selects instead of branches.
+- Read 8 bytes as `uint64_t`, compare equal to 0 lane-wise, extract bits.
+  The Cortex-M7 doesn't have NEON but it has `UQSUB8`/`USUB8`/`SEL` and
+  a 64-bit load (`LDRD`) — should pack 8 pixels in a handful of insns.
+
+A more invasive option: write a custom 1-bpp Video renderer (analogous
+to NDS's `_8P` variant) so the emulator core writes directly into a
+1-bit buffer. That removes the pack step entirely. The Playdate is
+400×240 1-bit; the existing 3× scale (96×3=288 wide, 64×3=192 tall) is
+fine. A 4× would be 384×256 — too tall.
+
+**3. SDK build flags are stock `-O2`, no LTO, no Cortex-M7 tuning**
+(`platform/playdate/CMakeLists.txt:84–90` only sets `-D` flags, the rest
+comes from `$PLAYDATE_SDK_PATH/C_API/buildsupport/arm.cmake`). The SDK's
+arm.cmake uses `-O2 -mthumb -mcpu=cortex-m7 -mfloat-abi=hard
+-mfpu=fpv5-sp-d16` — the CPU/FPU flags are already correct, but `-O2`
+without LTO is conservative for a tight emulation loop. Adding `-O3 -flto`
+(per-target, not editing the SDK file) is a low-effort experiment.
+
+**4. ITCM/DTCM placement of the CPU dispatch**. The Cortex-M7 on the
+Playdate has tightly-coupled memory; running `MinxCPU_Exec` and the
+opcode tables out of TCM avoids flash wait states. Need to check whether
+the SDK exposes a `__attribute__((section(...)))` for this. Lower
+priority than #1–#3 because flash on the Playdate is reasonably fast.
+
+### Plan if revisiting perf
+
+In order of effort/impact:
+1. Set `synccycles = 64`, rebuild device, eyeball framerate. (1-line change.)
+2. Branchless bit-pack in `render_screen`. (10-line change.)
+3. Add `-O3 -flto` for the device target in CMakeLists. (2-line change.)
+4. Custom 1-bpp Video renderer (`Video_x1_1bit.c` or similar) so the
+   emulator writes a packed buffer directly. (Bigger change; the NDS
+   `_8P` variant is the template.)
+5. ITCM placement for `MinxCPU_Exec` and dispatch tables.
+
+Things **not** worth changing: the audio path (already using the same
+callback model as NDS), the `LCDDirty` early-return (already in place),
+the 30fps × 2-frames-per-update cadence (PM is 72Hz, this is the
+closest approximation without splitting frames).
+
 ## Save state / EEPROM
 
 EEPROM save uses `fopen`, which works on simulator but silently fails on
