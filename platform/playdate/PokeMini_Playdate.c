@@ -237,6 +237,8 @@ static int update(void *userdata)
 	handle_input();
 	render_screen();
 
+	pd->system->drawFPS(0, 0);
+
 	return 1;
 }
 
@@ -260,7 +262,7 @@ int eventHandler(PlaydateAPI *playdate, PDSystemEvent event, uint32_t arg)
 		CommandLine.sound      = 1;
 		CommandLine.lcdfilter  = 0;
 		CommandLine.lcdmode    = LCDMODE_2SHADES;
-		CommandLine.synccycles = 16;
+		CommandLine.synccycles = 64;
 
 		JoystickSetup("Playdate", 0, 30000, PD_KeysNames, 7, PD_KeysMapping);
 

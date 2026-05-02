@@ -1447,8 +1447,7 @@ END GROUP
                 0x0000000000001260       0x14 CMakeFiles/PokeMini_DEVICE.dir/PokeMini_Playdate.c.obj
                 0x0000000000001260                UIItems_PlatformC
  *fill*         0x0000000000001274        0xc 
- .text.update   0x0000000000001280      0x2c4 CMakeFiles/PokeMini_DEVICE.dir/PokeMini_Playdate.c.obj
- *fill*         0x0000000000001544        0xc 
+ .text.update   0x0000000000001280      0x2d0 CMakeFiles/PokeMini_DEVICE.dir/PokeMini_Playdate.c.obj
  .text.audio_callback
                 0x0000000000001550       0x10 CMakeFiles/PokeMini_DEVICE.dir/PokeMini_Playdate.c.obj
  .text.eventHandler
@@ -3143,32 +3142,32 @@ END GROUP
  *(.ARM.exidx)
 OUTPUT(PokeMini_DEVICE.elf elf32-littlearm)
 
-.debug_info     0x0000000000000000    0x59072
- .debug_info    0x0000000000000000     0x91d1 CMakeFiles/PokeMini_DEVICE.dir/PokeMini_Playdate.c.obj
- .debug_info    0x00000000000091d1       0x5a CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/freebios/freebios.c.obj
- .debug_info    0x000000000000922b     0x1915 CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/PMCommon.c.obj
- .debug_info    0x000000000000ab40     0x4dc2 CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/PokeMini.c.obj
- .debug_info    0x000000000000f902     0x2091 CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/Multicart.c.obj
- .debug_info    0x0000000000011993     0x23bd CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/Hardware.c.obj
- .debug_info    0x0000000000013d50     0x4098 CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/Video.c.obj
- .debug_info    0x0000000000017de8     0x251e CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/Video_x1.c.obj
- .debug_info    0x000000000001a306     0x60af CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/CommandLine.c.obj
- .debug_info    0x00000000000203b5     0x24ba CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/MinxCPU.c.obj
- .debug_info    0x000000000002286f     0x67a0 CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/MinxCPU_XX.c.obj
- .debug_info    0x000000000002900f     0x76b8 CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/MinxCPU_CE.c.obj
- .debug_info    0x00000000000306c7     0x496e CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/MinxCPU_CF.c.obj
- .debug_info    0x0000000000035035      0xfc1 CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/MinxCPU_SP.c.obj
- .debug_info    0x0000000000035ff6     0x293b CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/MinxTimers.c.obj
- .debug_info    0x0000000000038931     0x2843 CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/MinxIO.c.obj
- .debug_info    0x000000000003b174     0x231d CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/MinxIRQ.c.obj
- .debug_info    0x000000000003d491     0x3770 CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/MinxPRC.c.obj
- .debug_info    0x0000000000040c01     0x3cdf CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/MinxColorPRC.c.obj
- .debug_info    0x00000000000448e0     0x2caa CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/MinxLCD.c.obj
- .debug_info    0x000000000004758a     0x2f81 CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/MinxAudio.c.obj
- .debug_info    0x000000000004a50b     0x4d2b CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/UI.c.obj
- .debug_info    0x000000000004f236     0x274e CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/Joystick.c.obj
- .debug_info    0x0000000000051984      0x127 CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/resource/PokeMini_ColorPal.c.obj
- .debug_info    0x0000000000051aab     0x75c7 CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Developer/PlaydateSDK/C_API/buildsupport/setup.c.obj
+.debug_info     0x0000000000000000    0x59081
+ .debug_info    0x0000000000000000     0x91e0 CMakeFiles/PokeMini_DEVICE.dir/PokeMini_Playdate.c.obj
+ .debug_info    0x00000000000091e0       0x5a CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/freebios/freebios.c.obj
+ .debug_info    0x000000000000923a     0x1915 CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/PMCommon.c.obj
+ .debug_info    0x000000000000ab4f     0x4dc2 CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/PokeMini.c.obj
+ .debug_info    0x000000000000f911     0x2091 CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/Multicart.c.obj
+ .debug_info    0x00000000000119a2     0x23bd CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/Hardware.c.obj
+ .debug_info    0x0000000000013d5f     0x4098 CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/Video.c.obj
+ .debug_info    0x0000000000017df7     0x251e CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/Video_x1.c.obj
+ .debug_info    0x000000000001a315     0x60af CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/CommandLine.c.obj
+ .debug_info    0x00000000000203c4     0x24ba CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/MinxCPU.c.obj
+ .debug_info    0x000000000002287e     0x67a0 CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/MinxCPU_XX.c.obj
+ .debug_info    0x000000000002901e     0x76b8 CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/MinxCPU_CE.c.obj
+ .debug_info    0x00000000000306d6     0x496e CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/MinxCPU_CF.c.obj
+ .debug_info    0x0000000000035044      0xfc1 CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/MinxCPU_SP.c.obj
+ .debug_info    0x0000000000036005     0x293b CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/MinxTimers.c.obj
+ .debug_info    0x0000000000038940     0x2843 CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/MinxIO.c.obj
+ .debug_info    0x000000000003b183     0x231d CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/MinxIRQ.c.obj
+ .debug_info    0x000000000003d4a0     0x3770 CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/MinxPRC.c.obj
+ .debug_info    0x0000000000040c10     0x3cdf CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/MinxColorPRC.c.obj
+ .debug_info    0x00000000000448ef     0x2caa CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/MinxLCD.c.obj
+ .debug_info    0x0000000000047599     0x2f81 CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/MinxAudio.c.obj
+ .debug_info    0x000000000004a51a     0x4d2b CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/UI.c.obj
+ .debug_info    0x000000000004f245     0x274e CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/Joystick.c.obj
+ .debug_info    0x0000000000051993      0x127 CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/resource/PokeMini_ColorPal.c.obj
+ .debug_info    0x0000000000051aba     0x75c7 CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Developer/PlaydateSDK/C_API/buildsupport/setup.c.obj
 
 .debug_abbrev   0x0000000000000000     0x6495
  .debug_abbrev  0x0000000000000000      0x50f CMakeFiles/PokeMini_DEVICE.dir/PokeMini_Playdate.c.obj
@@ -3299,32 +3298,32 @@ OUTPUT(PokeMini_DEVICE.elf elf32-littlearm)
  .debug_ranges  0x0000000000008df8       0x50 CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/Joystick.c.obj
  .debug_ranges  0x0000000000008e48       0x28 CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Developer/PlaydateSDK/C_API/buildsupport/setup.c.obj
 
-.debug_line     0x0000000000000000    0x2deb3
- .debug_line    0x0000000000000000      0xb4f CMakeFiles/PokeMini_DEVICE.dir/PokeMini_Playdate.c.obj
- .debug_line    0x0000000000000b4f       0x52 CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/freebios/freebios.c.obj
- .debug_line    0x0000000000000ba1      0xe82 CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/PMCommon.c.obj
- .debug_line    0x0000000000001a23     0x1b48 CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/PokeMini.c.obj
- .debug_line    0x000000000000356b      0xd36 CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/Multicart.c.obj
- .debug_line    0x00000000000042a1      0x812 CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/Hardware.c.obj
- .debug_line    0x0000000000004ab3     0x2029 CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/Video.c.obj
- .debug_line    0x0000000000006adc      0xa86 CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/Video_x1.c.obj
- .debug_line    0x0000000000007562     0x24b9 CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/CommandLine.c.obj
- .debug_line    0x0000000000009a1b      0xa9d CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/MinxCPU.c.obj
- .debug_line    0x000000000000a4b8     0x7419 CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/MinxCPU_XX.c.obj
- .debug_line    0x00000000000118d1     0x7e05 CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/MinxCPU_CE.c.obj
- .debug_line    0x00000000000196d6     0x4e14 CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/MinxCPU_CF.c.obj
- .debug_line    0x000000000001e4ea      0x884 CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/MinxCPU_SP.c.obj
- .debug_line    0x000000000001ed6e     0x1b5b CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/MinxTimers.c.obj
- .debug_line    0x00000000000208c9      0xe40 CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/MinxIO.c.obj
- .debug_line    0x0000000000021709      0xaaf CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/MinxIRQ.c.obj
- .debug_line    0x00000000000221b8     0x295e CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/MinxPRC.c.obj
- .debug_line    0x0000000000024b16     0x2b24 CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/MinxColorPRC.c.obj
- .debug_line    0x000000000002763a     0x1604 CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/MinxLCD.c.obj
- .debug_line    0x0000000000028c3e     0x185c CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/MinxAudio.c.obj
- .debug_line    0x000000000002a49a     0x28c6 CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/UI.c.obj
- .debug_line    0x000000000002cd60      0xc49 CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/Joystick.c.obj
- .debug_line    0x000000000002d9a9      0x120 CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/resource/PokeMini_ColorPal.c.obj
- .debug_line    0x000000000002dac9      0x3ea CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Developer/PlaydateSDK/C_API/buildsupport/setup.c.obj
+.debug_line     0x0000000000000000    0x2debc
+ .debug_line    0x0000000000000000      0xb58 CMakeFiles/PokeMini_DEVICE.dir/PokeMini_Playdate.c.obj
+ .debug_line    0x0000000000000b58       0x52 CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/freebios/freebios.c.obj
+ .debug_line    0x0000000000000baa      0xe82 CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/PMCommon.c.obj
+ .debug_line    0x0000000000001a2c     0x1b48 CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/PokeMini.c.obj
+ .debug_line    0x0000000000003574      0xd36 CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/Multicart.c.obj
+ .debug_line    0x00000000000042aa      0x812 CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/Hardware.c.obj
+ .debug_line    0x0000000000004abc     0x2029 CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/Video.c.obj
+ .debug_line    0x0000000000006ae5      0xa86 CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/Video_x1.c.obj
+ .debug_line    0x000000000000756b     0x24b9 CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/CommandLine.c.obj
+ .debug_line    0x0000000000009a24      0xa9d CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/MinxCPU.c.obj
+ .debug_line    0x000000000000a4c1     0x7419 CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/MinxCPU_XX.c.obj
+ .debug_line    0x00000000000118da     0x7e05 CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/MinxCPU_CE.c.obj
+ .debug_line    0x00000000000196df     0x4e14 CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/MinxCPU_CF.c.obj
+ .debug_line    0x000000000001e4f3      0x884 CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/MinxCPU_SP.c.obj
+ .debug_line    0x000000000001ed77     0x1b5b CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/MinxTimers.c.obj
+ .debug_line    0x00000000000208d2      0xe40 CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/MinxIO.c.obj
+ .debug_line    0x0000000000021712      0xaaf CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/MinxIRQ.c.obj
+ .debug_line    0x00000000000221c1     0x295e CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/MinxPRC.c.obj
+ .debug_line    0x0000000000024b1f     0x2b24 CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/MinxColorPRC.c.obj
+ .debug_line    0x0000000000027643     0x1604 CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/MinxLCD.c.obj
+ .debug_line    0x0000000000028c47     0x185c CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/MinxAudio.c.obj
+ .debug_line    0x000000000002a4a3     0x28c6 CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/UI.c.obj
+ .debug_line    0x000000000002cd69      0xc49 CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/source/Joystick.c.obj
+ .debug_line    0x000000000002d9b2      0x120 CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Git/pokemini/resource/PokeMini_ColorPal.c.obj
+ .debug_line    0x000000000002dad2      0x3ea CMakeFiles/PokeMini_DEVICE.dir/Users/pomettini/Developer/PlaydateSDK/C_API/buildsupport/setup.c.obj
 
 .debug_str      0x0000000000000000     0x748b
  .debug_str     0x0000000000000000     0x41d9 CMakeFiles/PokeMini_DEVICE.dir/PokeMini_Playdate.c.obj
