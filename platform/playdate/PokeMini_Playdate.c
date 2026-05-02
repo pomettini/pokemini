@@ -222,23 +222,36 @@ static int update(void *userdata)
 			PM_BIOS[4], PM_BIOS[5], PM_BIOS[6], PM_BIOS[7],
 			PM_BIOS[8], PM_BIOS[9], PM_BIOS[10], PM_BIOS[11],
 			PM_BIOS[12], PM_BIOS[13], PM_BIOS[14], PM_BIOS[15]);
-		pd->system->logToConsole("%s: pre-emul V=%02X PC=%04X SP=%04X F=%02X U1=%02X U2=%02X ShU=%d",
+		pd->system->logToConsole("%s: pre-emul V=%02X PC=%04X SP.D=%08X F=%02X U1=%02X U2=%02X ShU=%d",
 			AppName,
 			(int)MinxCPU.PC.B.I, (int)MinxCPU.PC.W.L,
-			(int)MinxCPU.SP.W.L, (int)MinxCPU.F,
+			(unsigned int)MinxCPU.SP.D, (int)MinxCPU.F,
 			(int)MinxCPU.U1, (int)MinxCPU.U2, (int)MinxCPU.Shift_U);
 
-		// Trace first 64 instructions
+		// Trace first 64 instructions, including SP.D so we can see SP.W.H
+		// (if PUSH's MinxCPU_OnWrite gets a 32-bit addr with junk in the upper
+		// 16 bits, the write skips RAM and falls into the "do nothing" branch)
 		for (int n = 0; n < 64; n++) {
 			pd->system->logToConsole(
-				"%s: t=%d V=%02X PC=%04X IR=%02X SP=%04X F=%02X PRCm=%d ACT=%02X Dirty=%d",
+				"%s: t=%d V=%02X PC=%04X IR=%02X SP.D=%08X F=%02X PRCm=%d ACT=%02X Dirty=%d",
 				AppName, n,
 				(int)MinxCPU.PC.B.I, (int)MinxCPU.PC.W.L,
-				(int)MinxCPU.IR, (int)MinxCPU.SP.W.L,
+				(int)MinxCPU.IR, (unsigned int)MinxCPU.SP.D,
 				(int)MinxCPU.F, (int)MinxPRC.PRCMode,
 				(int)PMR_IRQ_ACT1, LCDDirty);
 			step_one_instruction();
 		}
+
+		// After tracing, dump what's actually in RAM at the top of the stack.
+		// If PUSH wrote correctly, 1FFD..1FFF should hold the BIOS return
+		// address (V/PC.H/PC.L). If it's still 0xFF, the write went elsewhere.
+		pd->system->logToConsole(
+			"%s: post-trace RAM[0FF0..0FFF]: %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X",
+			AppName,
+			PM_RAM[0x0FF0], PM_RAM[0x0FF1], PM_RAM[0x0FF2], PM_RAM[0x0FF3],
+			PM_RAM[0x0FF4], PM_RAM[0x0FF5], PM_RAM[0x0FF6], PM_RAM[0x0FF7],
+			PM_RAM[0x0FF8], PM_RAM[0x0FF9], PM_RAM[0x0FFA], PM_RAM[0x0FFB],
+			PM_RAM[0x0FFC], PM_RAM[0x0FFD], PM_RAM[0x0FFE], PM_RAM[0x0FFF]);
 	}
 
 	PokeMini_EmulateFrame();
