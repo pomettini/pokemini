@@ -155,52 +155,73 @@ static void handle_input(void)
 	}
 }
 
+// 8 PM pixels (1 bit each, MSB = leftmost) expand to 24 Playdate framebuffer
+// bits at 3x horizontal scale.  Precomputed once at startup so each PM byte
+// becomes 3 byte stores instead of 24 read-modify-writes.
+static uint8_t expand_lut[256][3];
+
+static void init_expand_lut(void)
+{
+	for (int i = 0; i < 256; i++) {
+		uint32_t bits = 0;
+		for (int b = 0; b < 8; b++) {
+			if ((i >> (7 - b)) & 1) {
+				// Set 3 consecutive bits at the matching position in the 24-bit
+				// output (MSB-first to match Playdate framebuffer layout).
+				bits |= (uint32_t)0x7 << (24 - 3 - b * 3);
+			}
+		}
+		expand_lut[i][0] = (uint8_t)(bits >> 16);
+		expand_lut[i][1] = (uint8_t)(bits >> 8);
+		expand_lut[i][2] = (uint8_t)(bits);
+	}
+}
+
 // Blit the PM 96x64 frame into the Playdate 400x240 1-bit framebuffer at 3x
-// integer scale, centered at (SCREEN_X, SCREEN_Y).
-// We read LCDPixelsD directly: 0 = pixel off (light background) = white on
-// Playdate; non-zero = pixel on (dark ink) = black on Playdate.
-// This avoids any palette index ambiguity (Pixel0Intensity is ~240, not 0).
+// integer scale, centered at (SCREEN_X, SCREEN_Y).  SCREEN_X (56) is byte-
+// aligned (56 = 7*8), so each row writes 36 bytes starting at fb + row*RS + 7.
+// 0 in LCDPixelsD = pixel off = light = white = bit set on Playdate.
 static void render_screen(void)
 {
+	if (!LCDDirty) return;
 	LCDDirty = 0;
 
 	uint8_t *fb = pd->graphics->getFrame();
+	const int byte_x = SCREEN_X / 8;  // 7
+	const int pm_bytes = PM_W / 8;    // 12
 
 	for (int y = 0; y < PM_H; y++) {
-		for (int x = 0; x < PM_W; x++) {
-			// Off pixel = light background = white; on pixel = dark ink = black
-			int white = (LCDPixelsD[y * PM_W + x] == 0);
-			for (int dy = 0; dy < PM_SCALE; dy++) {
-				uint8_t *row = fb + (SCREEN_Y + y * PM_SCALE + dy) * LCD_ROWSIZE;
-				for (int dx = 0; dx < PM_SCALE; dx++) {
-					int px = SCREEN_X + x * PM_SCALE + dx;
-					uint8_t mask = (uint8_t)(0x80 >> (px & 7));
-					if (white) row[px >> 3] |=  mask;
-					else       row[px >> 3] &= ~mask;
-				}
+		// Pack 96 PM pixels into 12 bytes (1 bit per pixel, white = 1).
+		uint8_t pm_row[12];
+		const uint8_t *src = &LCDPixelsD[y * PM_W];
+		for (int bx = 0; bx < pm_bytes; bx++) {
+			uint8_t byte = 0;
+			if (src[0] == 0) byte |= 0x80;
+			if (src[1] == 0) byte |= 0x40;
+			if (src[2] == 0) byte |= 0x20;
+			if (src[3] == 0) byte |= 0x10;
+			if (src[4] == 0) byte |= 0x08;
+			if (src[5] == 0) byte |= 0x04;
+			if (src[6] == 0) byte |= 0x02;
+			if (src[7] == 0) byte |= 0x01;
+			pm_row[bx] = byte;
+			src += 8;
+		}
+
+		// Expand each PM byte to 3 Playdate bytes via LUT, write 3 rows.
+		for (int dy = 0; dy < PM_SCALE; dy++) {
+			uint8_t *dst = fb + (SCREEN_Y + y * PM_SCALE + dy) * LCD_ROWSIZE + byte_x;
+			for (int bx = 0; bx < pm_bytes; bx++) {
+				const uint8_t *e = expand_lut[pm_row[bx]];
+				dst[0] = e[0];
+				dst[1] = e[1];
+				dst[2] = e[2];
+				dst += 3;
 			}
 		}
 	}
 
 	pd->graphics->markUpdatedRows(SCREEN_Y, SCREEN_Y + PM_H * PM_SCALE - 1);
-}
-
-// Step the emulator by a small number of cycles, just enough to retire one
-// instruction worth of work plus PRC/timer sync.  Mirrors the inner loop of
-// PokeMini_EmulateFrame but allows the caller to log PC between steps.
-static int step_one_instruction(void)
-{
-	int cycles = 0;
-	if (StallCPU) {
-		cycles = StallCycles;
-		PokeHWCycles = cycles;
-	} else {
-		cycles = MinxCPU_Exec();
-		PokeHWCycles = cycles;
-	}
-	MinxTimers_Sync();
-	MinxPRC_Sync();
-	return cycles;
 }
 
 // Update callback: called by the Playdate runtime at 30 fps.
@@ -210,75 +231,10 @@ static int update(void *userdata)
 {
 	(void)userdata;
 
-	static int diag_frame = 0;
-
-	// On the very first update, dump a step-by-step PC trace of what the CPU
-	// does before reaching the eventual stuck state.  We log the first N
-	// instructions so we can see the boot sequence on real hardware.
-	if (diag_frame == 0) {
-		pd->system->logToConsole("%s: BIOS[0..15]: %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X",
-			AppName,
-			PM_BIOS[0], PM_BIOS[1], PM_BIOS[2], PM_BIOS[3],
-			PM_BIOS[4], PM_BIOS[5], PM_BIOS[6], PM_BIOS[7],
-			PM_BIOS[8], PM_BIOS[9], PM_BIOS[10], PM_BIOS[11],
-			PM_BIOS[12], PM_BIOS[13], PM_BIOS[14], PM_BIOS[15]);
-		pd->system->logToConsole("%s: pre-emul V=%02X PC=%04X SP.D=%08X F=%02X U1=%02X U2=%02X ShU=%d",
-			AppName,
-			(int)MinxCPU.PC.B.I, (int)MinxCPU.PC.W.L,
-			(unsigned int)MinxCPU.SP.D, (int)MinxCPU.F,
-			(int)MinxCPU.U1, (int)MinxCPU.U2, (int)MinxCPU.Shift_U);
-
-		// Trace first 64 instructions, including SP.D so we can see SP.W.H
-		// (if PUSH's MinxCPU_OnWrite gets a 32-bit addr with junk in the upper
-		// 16 bits, the write skips RAM and falls into the "do nothing" branch)
-		for (int n = 0; n < 64; n++) {
-			pd->system->logToConsole(
-				"%s: t=%d V=%02X PC=%04X IR=%02X SP.D=%08X F=%02X PRCm=%d ACT=%02X Dirty=%d",
-				AppName, n,
-				(int)MinxCPU.PC.B.I, (int)MinxCPU.PC.W.L,
-				(int)MinxCPU.IR, (unsigned int)MinxCPU.SP.D,
-				(int)MinxCPU.F, (int)MinxPRC.PRCMode,
-				(int)PMR_IRQ_ACT1, LCDDirty);
-			step_one_instruction();
-		}
-
-		// After tracing, dump what's actually in RAM at the top of the stack.
-		// If PUSH wrote correctly, 1FFD..1FFF should hold the BIOS return
-		// address (V/PC.H/PC.L). If it's still 0xFF, the write went elsewhere.
-		pd->system->logToConsole(
-			"%s: post-trace RAM[0FF0..0FFF]: %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X",
-			AppName,
-			PM_RAM[0x0FF0], PM_RAM[0x0FF1], PM_RAM[0x0FF2], PM_RAM[0x0FF3],
-			PM_RAM[0x0FF4], PM_RAM[0x0FF5], PM_RAM[0x0FF6], PM_RAM[0x0FF7],
-			PM_RAM[0x0FF8], PM_RAM[0x0FF9], PM_RAM[0x0FFA], PM_RAM[0x0FFB],
-			PM_RAM[0x0FFC], PM_RAM[0x0FFD], PM_RAM[0x0FFE], PM_RAM[0x0FFF]);
-	}
-
 	PokeMini_EmulateFrame();
 	PokeMini_EmulateFrame();
 
 	handle_input();
-
-	// Log first 60 frames to diagnose device rendering issues.
-	if (diag_frame < 60) {
-		int on = 0;
-		for (int i = 0; i < PM_W * PM_H; i++) if (LCDPixelsD[i]) on++;
-		pd->system->logToConsole(
-			"%s: f=%d V=%02X PC=%04X F=%02X Stat=%d MIrq=%d ENA=%02X ACT=%02X PRC=%d Disp=%d Dirty=%d on=%d",
-			AppName, diag_frame,
-			(int)MinxCPU.PC.B.I,
-			(int)MinxCPU.PC.W.L,
-			(int)MinxCPU.F,
-			(int)MinxCPU.Status,
-			MinxIRQ_MasterIRQ,
-			(int)PMR_IRQ_ENA1,
-			(int)PMR_IRQ_ACT1,
-			(int)MinxPRC.PRCMode,
-			(int)MinxLCD.DisplayOn,
-			LCDDirty, on);
-		diag_frame++;
-	}
-
 	render_screen();
 
 	return 1;
@@ -297,12 +253,14 @@ int eventHandler(PlaydateAPI *playdate, PDSystemEvent event, uint32_t arg)
 		// 30 fps display rate; we emulate 2 PM frames per call
 		pd->display->setRefreshRate(30);
 
+		init_expand_lut();
+
 		// Configure emulator defaults suitable for Playdate
 		CommandLineInit();
 		CommandLine.sound      = 1;
 		CommandLine.lcdfilter  = 0;
 		CommandLine.lcdmode    = LCDMODE_2SHADES;
-		CommandLine.synccycles = 8;
+		CommandLine.synccycles = 16;
 
 		JoystickSetup("Playdate", 0, 30000, PD_KeysNames, 7, PD_KeysMapping);
 
