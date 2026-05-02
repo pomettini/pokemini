@@ -264,7 +264,7 @@ int eventHandler(PlaydateAPI *playdate, PDSystemEvent event, uint32_t arg)
 		CommandLine.sound      = 1;
 		CommandLine.lcdfilter  = 0;
 		CommandLine.lcdmode    = LCDMODE_2SHADES;
-		CommandLine.synccycles = 64;
+		CommandLine.synccycles = 512;
 
 		JoystickSetup("Playdate", 0, 30000, PD_KeysNames, 7, PD_KeysMapping);
 

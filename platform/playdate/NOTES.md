@@ -126,109 +126,125 @@ early-return is safe and worth keeping for performance.
 - **Diagnostic `logToConsole` is expensive** — even 60 calls during startup
   noticeably delays first frame. Strip diag logs once a fix is verified.
 
-## Performance levers
+## Performance: what landed and what was tried (2026-05-03)
 
-If the game runs slow:
-- **Increase `CommandLine.synccycles`** — currently 16. Try 32 or 64. Higher
-  values reduce PRC/Timer sync overhead at the cost of slightly less accurate
-  interrupt timing. 64 is the documented max for non-sound-sync ports.
-- **Re-enable LCDDirty early-return** in `render_screen` (already enabled).
-- **Compile with `-O3`** (currently `-O2` per Playdate's `arm.cmake`).
-- **Consider `setRefreshRate(50)` with 1 emulated frame per call** if 30fps
-  with 2 frames is too much. PM is natively 72Hz; either 60Hz (current) or
-  50Hz emulation will look wrong but be playable.
+Final state: **100% real PM speed for typical gameplay**, 93% under heavy
+PRC load (busy sprite scenes), display steady at 30 fps. No audio/visual/
+input glitches. Got there through a sequence of measure→change→measure
+iterations, summarized below so future tuning starts from data, not guesses.
 
-## Performance analysis — comparing to other ports (2026-05-02)
+### What worked, in the order applied
 
-Currently running well below native Pokémon Mini speed on device. The NDS
-port runs at full speed on a 67 MHz ARM9, so a 180 MHz Cortex-M7 should
-have plenty of headroom — the slowness is something the port is doing,
-not a hardware ceiling. What follows is a comparison against ports that
-hit native speed and a list of suspected bottlenecks ranked by severity.
+1. **`synccycles 16 → 64`** (`PokeMini_Playdate.c:263`). The original 16 was
+   carried over from the synccycles-init-bug fix and was below the
+   `PERFORMANCE` default of 64. Fastpath: every sync exits the CPU inner
+   loop and calls `MinxTimers_Sync()` + `MinxPRC_Sync()` (Hardware.c:55–57).
+   At 16 vs 64 that's ~4× more sync overhead per frame.
+   Result: gameplay went from "well under speed" to "close to real, ~83%."
+2. **`-O3 -flto` for the device target** (CMakeLists.txt: added to the
+   `armgcc` branch). The SDK's `arm.cmake` defaults to `-O2` with no LTO.
+   `-O3 -flto` enables cross-TU inlining of `MinxCPU_Exec` → `Fetch8`
+   → `MinxCPU_OnRead` (which lives in Hardware.c) and the per-cycle
+   `MinxTimers_Sync` / `MinxPRC_Sync` calls, plus aggressive opcode
+   handler inlining. Big win — the most impactful single change.
+   Result: gameplay jumped to "very close to real, ~90%, with FPS dipping
+   to 18-23 in heavy scenes."
+3. **Branchless + fused `render_screen`** (`PokeMini_Playdate.c:184–222`).
+   Replaced 8× conditional `if (src[i] == 0) byte |= 0x..` with a single
+   expression `((src[0] == 0) << 7) | ...`, and merged the pack and expand
+   passes (no `pm_row[12]` temp, write directly to all 3 destination rows
+   per byte). Smaller than expected impact, see "what we measured" below.
+   Result: "very close to native, slightly slower."
+4. **Fractional pacing accumulator** (`PokeMini_Playdate.c:228–245`). To
+   match PM's 72 Hz against Playdate's 30 Hz refresh, emulate 2 or 3 PM
+   frames per Playdate frame in pattern 2,2,3,2,3 (12 PM frames per 5
+   Playdate frames = 72 fps exactly). Integer accumulator: `frame_accum +=
+   12; pm_frames = frame_accum / 5; frame_accum -= pm_frames * 5`.
+   Result: when display can hit 30, emulation is exactly 1:1 with real PM.
+5. **`synccycles 64 → 256 → 512`** (the documented max under
+   `PERFORMANCE`, see UI.c:915). Cuts sync overhead another 4–8× from
+   step 1. Profiling showed ~150ms/sec saved in heavy scenes from 64→256,
+   another ~50ms/sec from 256→512.
+   Result: light scenes hit 100% real speed with 7ms idle per call;
+   heavy scenes 93%. No glitches at 512 (verified on device).
 
-### What the fast ports do
+### What we measured (for future reference)
 
-**NDS (`platform/nds/PokeMini_NDS.c`, `platform/nds/makefile:37`)** —
-runs full-speed on weaker hardware:
-- `CFLAGS += ... -DPERFORMANCE` (makefile:37). With `PERFORMANCE` defined,
-  `CommandLineInit` sets `synccycles = 64` (CommandLine.c:118). The NDS
-  port does **not** override it, so it runs with the full 64-cycle batch.
-- Uses **`Video_x2`** at 192×128 with a custom **8-bit paletted** variant
-  `PokeMini_Video2x2_8P` (PokeMini_NDS.c:36, 361). Output is one byte per
-  destination pixel — no per-pixel format conversion in the port.
-- Audio uses the Maxmod stream callback (PokeMini_NDS.c:210–214) calling
-  `MinxAudio_GenerateEmulatedS8` directly into the destination buffer.
-  Same `POKEMINI_GENSOUND` callback model the Playdate already uses.
-- Renders only when `LCDDirty` is set (PokeMini_NDS.c:424–427) — same
-  optimization the Playdate has.
+After step 4, added phase timing in `update()` (since stripped). Logged
+per-second totals to console. Two regimes were visible:
+- **Light scenes (steady):** 30 calls/sec × 2.4 PM frames = 72 emulated/sec.
+  emu=~780ms, render=~13ms, input=<1ms, per_call=~26ms (i.e. 7ms idle).
+  Display capped at 30 by `setRefreshRate(30)`.
+- **Heavy scenes:** 28 calls/sec × ~67 PM = 67 emulated/sec (93% real).
+  emu=~970ms (saturated at 100% CPU), render=~13ms.
 
-**Other small ports**: GCW uses `Video_x3` (288×192, 16-bit), BitBoy and
-nspire use `Video_x2`, PSP uses `Video_x2`/`Video_x4`. None of them
-override `synccycles`; they all rely on the `PERFORMANCE` default of 64.
+Per-PM-frame cost was ~11ms in light scenes, ~14.5ms in heavy — so heavy
+scenes cost 30% more emulator time per PM frame. That's not opcode
+dispatch overhead (which is constant per opcode) but extra per-frame work:
+PRC sprite/BG draw, more game logic. To break this further you'd need to
+profile inside `MinxPRC_Sync` and `MinxCPU_Exec`, not the wrapper.
 
-### Where the Playdate port is leaving cycles on the floor
+The **render path was never the bottleneck** despite our suspicions: it
+costs ~10–14ms per *second* (1% of CPU). Branchless+fused was a small win
+but largely unmeasurable against the noise. If revisiting, leave it alone
+and target the core.
 
-In rough order of suspected impact:
+### What was tried and didn't help (or actively hurt)
 
-**1. `synccycles = 16` is below the `PERFORMANCE` default of 64**
-(`PokeMini_Playdate.c:263`). Every sync exits the inner CPU loop, calls
-`MinxTimers_Sync()` and `MinxPRC_Sync()` (Hardware.c:55–57). At 16 vs 64
-that's roughly **4× more sync calls per frame**. (Earlier estimates of
-"3500×" were wrong — they confused `synccycles` with `POKEMINI_FRAME_CYC`,
-which is the total cycles per frame, not the sync granularity.) Cheap fix:
-bump to 64 and measure. UI clamps the upper bound to 512 in `PERFORMANCE`
-mode (UI.c:915), so 128 or 256 are also worth trying.
+- **Time-based pacing** (emulate `delta_ms × 72 / 1000` PM frames, with a
+  100ms cap to avoid spirals). Conceptually right — keeps emulated time
+  matched to wall time across FPS dips. In practice on a saturated device,
+  delta climbs to the cap, asks for 7+ PM frames per call, each call takes
+  80ms+, display drops to 10–15 fps. The cap turns "slightly slow" into
+  "slow AND unresponsive." Reverted in favor of the fixed 12/5 pattern.
+- **`setRefreshRate(36)`** to get a clean 1:2 ratio with PM's 72 Hz. Math
+  works but device couldn't sustain 36 Hz with the emulation load even
+  after all wins above; would have made the floor worse, not better.
 
-**2. `render_screen` does scalar bit-packing on the CPU**
-(`PokeMini_Playdate.c:193–222`). Every refresh:
-- 64 rows × 12 bytes × 8 conditional ORs = **6144 compares + ORs** to
-  pack `LCDPixelsD` (1-byte-per-pixel) into 1-bpp.
-- Then 64 rows × 12 bytes × 3 (scale) × 3 (vertical repeat) = **6912
-  byte writes** through a 256-entry LUT into the framebuffer.
+### What's NOT available on the Playdate
 
-The bit-packing loop is the suspicious part — eight branchy `if (src[i] == 0) byte |= 0x..` per byte. Two cheap rewrites worth trying (in order):
+Investigated and ruled out — don't waste time re-investigating:
+- **ITCM/DTCM placement.** Playdate SDK's `link_map.ld` defines no TCM
+  region. User code runs from internal SRAM (loaded ELF); ITCM is reserved
+  for firmware. Section attributes `__attribute__((section(".itcm")))`
+  won't be honored by the loader. Cortex-M7 TCM tricks don't apply here.
+- **Native 1-bpp Video renderer** (in the `Video_x*.c` sense). The
+  PokéMini renderer architecture reads from `LCDPixelsD` (1 byte per
+  pixel, written by MinxLCD/MinxPRC) and produces output in some format.
+  A "1-bpp variant" would still read 1 byte/pixel and pack — exactly what
+  `render_screen` already does. Truly skipping `LCDPixelsD` would mean
+  rewriting MinxLCD's per-pixel writes to RMW-pack bits, which is
+  invasive and probably slower on Cortex-M7 (RMW vs byte store).
 
-- Branchless pack: `byte = ((src[0]==0)<<7) | ((src[1]==0)<<6) | ...` —
-  lets the compiler emit conditional selects instead of branches.
-- Read 8 bytes as `uint64_t`, compare equal to 0 lane-wise, extract bits.
-  The Cortex-M7 doesn't have NEON but it has `UQSUB8`/`USUB8`/`SEL` and
-  a 64-bit load (`LDRD`) — should pack 8 pixels in a handful of insns.
+### Where the remaining 7% deficit lives
 
-A more invasive option: write a custom 1-bpp Video renderer (analogous
-to NDS's `_8P` variant) so the emulator core writes directly into a
-1-bit buffer. That removes the pack step entirely. The Playdate is
-400×240 1-bit; the existing 3× scale (96×3=288 wide, 64×3=192 tall) is
-fine. A 4× would be 384×256 — too tall.
+Heavy-scene saturation is 100% emulator-core-bound. To close it would
+need real engineering inside the core, in approximate effort/impact order:
+- Per-component profiling (split `MinxCPU_Exec` vs `MinxPRC_Sync` time)
+  to confirm whether PRC sprite-render is the actual hotspot.
+- Computed-goto / threaded-interpretation rewrite of `MinxCPU_Exec`'s
+  256-case switch (currently a jump table — probably hard to beat with
+  GCC).
+- Frameskip option (drop every Nth PM frame's render under load, but
+  keep emulating) — would help display smoothness, not real-time speed.
 
-**3. SDK build flags are stock `-O2`, no LTO, no Cortex-M7 tuning**
-(`platform/playdate/CMakeLists.txt:84–90` only sets `-D` flags, the rest
-comes from `$PLAYDATE_SDK_PATH/C_API/buildsupport/arm.cmake`). The SDK's
-arm.cmake uses `-O2 -mthumb -mcpu=cortex-m7 -mfloat-abi=hard
--mfpu=fpv5-sp-d16` — the CPU/FPU flags are already correct, but `-O2`
-without LTO is conservative for a tight emulation loop. Adding `-O3 -flto`
-(per-target, not editing the SDK file) is a low-effort experiment.
+Probably not worth pursuing for a 7% deficit that only shows up briefly.
 
-**4. ITCM/DTCM placement of the CPU dispatch**. The Cortex-M7 on the
-Playdate has tightly-coupled memory; running `MinxCPU_Exec` and the
-opcode tables out of TCM avoids flash wait states. Need to check whether
-the SDK exposes a `__attribute__((section(...)))` for this. Lower
-priority than #1–#3 because flash on the Playdate is reasonably fast.
+## Performance levers (quick reference)
 
-### Plan if revisiting perf
+If perf regresses:
+- `CommandLine.synccycles` — currently 512, max under `PERFORMANCE`.
+  Lower = more accurate hardware sync, slower. UI.c clamps to 8..512.
+- `-O3 -flto` is set per-target in `CMakeLists.txt` (armgcc branch only).
+  Removing it costs ~10% emulator throughput.
+- `pd->display->setRefreshRate(30)` — stays at 30. PM at 72 Hz doesn't
+  divide evenly into anything the Playdate panel comfortably runs.
+- `pd->system->drawFPS(0,0)` — kept as a permanent overlay. Trivial cost.
+  Remove the call if you want it gone.
 
-In order of effort/impact:
-1. Set `synccycles = 64`, rebuild device, eyeball framerate. (1-line change.)
-2. Branchless bit-pack in `render_screen`. (10-line change.)
-3. Add `-O3 -flto` for the device target in CMakeLists. (2-line change.)
-4. Custom 1-bpp Video renderer (`Video_x1_1bit.c` or similar) so the
-   emulator writes a packed buffer directly. (Bigger change; the NDS
-   `_8P` variant is the template.)
-5. ITCM placement for `MinxCPU_Exec` and dispatch tables.
-
-Things **not** worth changing: the audio path (already using the same
-callback model as NDS), the `LCDDirty` early-return (already in place),
-the 30fps × 2-frames-per-update cadence (PM is 72Hz, this is the
-closest approximation without splitting frames).
+Things **not** worth changing: the audio path (already callback-driven
+like NDS), the `LCDDirty` early-return in `render_screen`, the 12/5
+fractional pacing pattern.
 
 ## Save state / EEPROM
 
