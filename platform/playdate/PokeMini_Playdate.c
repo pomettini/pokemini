@@ -191,48 +191,50 @@ static void render_screen(void)
 	const int pm_bytes = PM_W / 8;    // 12
 
 	for (int y = 0; y < PM_H; y++) {
-		// Pack 96 PM pixels into 12 bytes (1 bit per pixel, white = 1).
-		uint8_t pm_row[12];
 		const uint8_t *src = &LCDPixelsD[y * PM_W];
-		for (int bx = 0; bx < pm_bytes; bx++) {
-			uint8_t byte = 0;
-			if (src[0] == 0) byte |= 0x80;
-			if (src[1] == 0) byte |= 0x40;
-			if (src[2] == 0) byte |= 0x20;
-			if (src[3] == 0) byte |= 0x10;
-			if (src[4] == 0) byte |= 0x08;
-			if (src[5] == 0) byte |= 0x04;
-			if (src[6] == 0) byte |= 0x02;
-			if (src[7] == 0) byte |= 0x01;
-			pm_row[bx] = byte;
-			src += 8;
-		}
+		uint8_t *dst0 = fb + (SCREEN_Y + y * PM_SCALE)     * LCD_ROWSIZE + byte_x;
+		uint8_t *dst1 = dst0 + LCD_ROWSIZE;
+		uint8_t *dst2 = dst1 + LCD_ROWSIZE;
 
-		// Expand each PM byte to 3 Playdate bytes via LUT, write 3 rows.
-		for (int dy = 0; dy < PM_SCALE; dy++) {
-			uint8_t *dst = fb + (SCREEN_Y + y * PM_SCALE + dy) * LCD_ROWSIZE + byte_x;
-			for (int bx = 0; bx < pm_bytes; bx++) {
-				const uint8_t *e = expand_lut[pm_row[bx]];
-				dst[0] = e[0];
-				dst[1] = e[1];
-				dst[2] = e[2];
-				dst += 3;
-			}
+		for (int bx = 0; bx < pm_bytes; bx++) {
+			// Branchless pack: 8 PM pixels -> 1 byte (bit set when pixel is 0/off).
+			uint8_t b =
+				((src[0] == 0) << 7) | ((src[1] == 0) << 6) |
+				((src[2] == 0) << 5) | ((src[3] == 0) << 4) |
+				((src[4] == 0) << 3) | ((src[5] == 0) << 2) |
+				((src[6] == 0) << 1) | ((src[7] == 0)     );
+			src += 8;
+
+			// Expand to 3 Playdate bytes, replicate across 3 vertical-scale rows.
+			const uint8_t *e = expand_lut[b];
+			dst0[0] = e[0]; dst0[1] = e[1]; dst0[2] = e[2];
+			dst1[0] = e[0]; dst1[1] = e[1]; dst1[2] = e[2];
+			dst2[0] = e[0]; dst2[1] = e[1]; dst2[2] = e[2];
+			dst0 += 3; dst1 += 3; dst2 += 3;
 		}
 	}
 
 	pd->graphics->markUpdatedRows(SCREEN_Y, SCREEN_Y + PM_H * PM_SCALE - 1);
 }
 
-// Update callback: called by the Playdate runtime at 30 fps.
-// Emulate 2 PM frames per display frame so the emulated rate (~60 Hz) stays
-// close to the Pokemon Mini's native 72 Hz.
+// Update callback: called by the Playdate runtime at 30 fps (target).
+// Pokemon Mini runs natively at ~72 Hz. To keep emulated time matched to real
+// time we need 72/30 = 2.4 PM frames per display frame on average. Use an
+// integer fractional accumulator (numerator 12, denominator 5) to pace this
+// exactly: across every 5 update calls we run 12 PM frames (pattern 2,2,3,2,3).
+// When display FPS dips below 30 the emulator runs proportionally slower; this
+// is preferable to time-based catch-up which trades display responsiveness for
+// emulation accuracy and tends to spiral under sustained load.
 static int update(void *userdata)
 {
 	(void)userdata;
 
-	PokeMini_EmulateFrame();
-	PokeMini_EmulateFrame();
+	static int frame_accum = 0;
+	frame_accum += 12;
+	int pm_frames = frame_accum / 5;
+	frame_accum -= pm_frames * 5;
+
+	for (int i = 0; i < pm_frames; i++) PokeMini_EmulateFrame();
 
 	handle_input();
 	render_screen();

@@ -6,5 +6,5 @@ C_DEFINES = -DNO_DIRS -DNO_SCANDIRS -DNO_ZIP -DPERFORMANCE -DSIMPLE_CONTROLS -DT
 
 C_INCLUDES = -I/Users/pomettini/Developer/PlaydateSDK/C_API -I/Users/pomettini/Git/pokemini/platform/playdate/../../source -I/Users/pomettini/Git/pokemini/platform/playdate/../../resource -I/Users/pomettini/Git/pokemini/platform/playdate/../../freebios
 
-C_FLAGS = -g -std=gnu11 -Wall -Wno-unknown-pragmas -Wdouble-promotion -O2 -mthumb -mcpu=cortex-m7 -mfloat-abi=hard -mfpu=fpv5-sp-d16 -D__FPU_USED=1 -falign-functions=16 -fomit-frame-pointer -gdwarf-2 -fverbose-asm -ffunction-sections -fdata-sections -mword-relocations -fno-common
+C_FLAGS = -g -std=gnu11 -Wall -Wno-unknown-pragmas -Wdouble-promotion -O2 -mthumb -mcpu=cortex-m7 -mfloat-abi=hard -mfpu=fpv5-sp-d16 -D__FPU_USED=1 -falign-functions=16 -fomit-frame-pointer -gdwarf-2 -fverbose-asm -ffunction-sections -fdata-sections -mword-relocations -fno-common -O3 -flto
 

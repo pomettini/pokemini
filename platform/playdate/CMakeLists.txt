@@ -91,4 +91,6 @@ target_compile_definitions(${TARGET_NAME} PRIVATE
 
 if (TOOLCHAIN STREQUAL "armgcc")
     target_link_options(${TARGET_NAME} PRIVATE --specs=nosys.specs)
+    target_compile_options(${TARGET_NAME} PRIVATE -O3 -flto)
+    target_link_options(${TARGET_NAME} PRIVATE -O3 -flto)
 endif()
