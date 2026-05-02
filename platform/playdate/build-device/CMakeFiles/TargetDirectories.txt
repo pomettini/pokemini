@@ -1,0 +1,3 @@
+/Users/pomettini/Git/pokemini/platform/playdate/build-device/CMakeFiles/PokeMini_DEVICE.dir
+/Users/pomettini/Git/pokemini/platform/playdate/build-device/CMakeFiles/edit_cache.dir
+/Users/pomettini/Git/pokemini/platform/playdate/build-device/CMakeFiles/rebuild_cache.dir

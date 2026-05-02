@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -c ' *)",
+      "Bash(cmake --build .)",
+      "Bash(open *)",
+      "Bash(arm-none-eabi-gcc --version)",
+      "Read(//Users/pomettini/Developer/PlaydateSDK/C_API/buildsupport/**)",
+      "Bash(/Users/pomettini/Developer/PlaydateSDK/bin/pdutil list *)",
+      "Bash(/Users/pomettini/Developer/PlaydateSDK/bin/pdutil *)",
+      "Bash(cp *)",
+      "Bash(diskutil eject *)",
+      "Bash(sudo ls *)",
+      "Bash(python3 *)"
+    ]
+  }
+}

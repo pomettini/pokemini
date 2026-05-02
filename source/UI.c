@@ -1,5 +1,5 @@
 /*
-  PokeMini - Pokémon-Mini Emulator
+  PokeMini - Pokï¿½mon-Mini Emulator
   Copyright (C) 2009-2014  JustBurn
 
   This program is free software: you can redistribute it and/or modify
@@ -619,7 +619,9 @@ int UIItems_MainMenuC(int index, int reason)
 				} else UIMenu_GotoRelativeDir(NULL);
 				UIMenu_Page = UIPAGE_LOADROM;
 				UIMenu_Cur = 0;
+#ifndef NO_DIRS
 				UIMenu_ListFiles = UIMenu_ReadDir(PokeMini_CurrDir);
+#endif
 				UIMenu_ListOffs = 0;
 				break;
 			case 2: // Load state
@@ -1094,6 +1096,7 @@ int UIMenu_DoStuff(int key)
 				UIMenu_Cur = 0;
 				UIMenu_ListOffs = 0;
 			}
+#ifndef NO_DIRS
 			if (key == MINX_KEY_LEFT) {
 				// Hack to support windows drives
 				if (strlen(PokeMini_CurrDir) >= 3) {
@@ -1132,6 +1135,7 @@ int UIMenu_DoStuff(int key)
 					}
 				}
 			}
+#endif
 		} else {
 			// Key C Modifier (Off)
 			// Down  = Previous item
@@ -1206,7 +1210,9 @@ int UIMenu_DoStuff(int key)
 				if (UIMenu_FileListCache[UIMenu_ListOffs + UIMenu_Cur].stats == 2) {
 					// Load ROM
 					PokeMini_GotoCurrentDir();
+#ifndef NO_DIRS
 					strcpy(CommandLine.rom_dir, PokeMini_CurrDir);
+#endif
 					PokeMini_LoadROM(UIMenu_FileListCache[UIMenu_ListOffs + UIMenu_Cur].name);
 					PokeMini_GotoExecDir();
 					UIMenu_Page = UIPAGE_MENUITEMS;
@@ -1217,7 +1223,9 @@ int UIMenu_DoStuff(int key)
 					// Jump to directory
 					UIMenu_GotoRelativeDir(UIMenu_FileListCache[UIMenu_ListOffs + UIMenu_Cur].name);
 					UIMenu_Cur = 0;
+#ifndef NO_DIRS
 					UIMenu_ListFiles = UIMenu_ReadDir(PokeMini_CurrDir);
+#endif
 					UIMenu_ListOffs = 0;
 				}
 			}
@@ -1308,7 +1316,9 @@ void UIMenu_Display_32(uint32_t *screen, int pitchW)
 		UIDraw_String_32(screen, pitchW, 4, 2, padd, "Load Rom", UI_Font2_Pal32);
 
 		// Display current dir and parent
+#ifndef NO_DIRS
 		UIText_Scroll(text, PokeMini_CurrDir, (UIMenu_Width/padd)-2, UIMenu_Ani>>4);
+#endif
 		UIDraw_String_32(screen, pitchW, 4, 20, padd, text, UI_Font2_Pal32);
 
 		// Display files list
@@ -1432,7 +1442,9 @@ void UIMenu_Display_16(uint16_t *screen, int pitchW)
 		UIDraw_String_16(screen, pitchW, 4, 2, padd, "Load ROM", UI_Font2_Pal16);
 
 		// Display current dir and parent
+#ifndef NO_DIRS
 		UIText_Scroll(text, PokeMini_CurrDir, (UIMenu_Width/padd)-2, UIMenu_Ani>>4);
+#endif
 		UIDraw_String_16(screen, pitchW, 4, 20, padd, text, UI_Font2_Pal16);
 
 		// Display files list

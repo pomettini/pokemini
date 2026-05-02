@@ -1,5 +1,5 @@
 /*
-  PokeMini - Pokémon-Mini Emulator
+  PokeMini - Pokï¿½mon-Mini Emulator
   Copyright (C) 2009-2015  JustBurn
 
   This program is free software: you can redistribute it and/or modify
@@ -509,7 +509,10 @@ void PokeMini_GotoExecDir(void)
 
 #else
 
-void PokeMini_InitDirs(char *execdir) {}
+void PokeMini_InitDirs(char *argv0, char *exec) {}
+void PokeMini_GetCustomDir(char *dir, int max) { if (max > 0) dir[0] = 0; }
+void PokeMini_GotoCustomDir(const char *dir) {}
+void PokeMini_SetCurrentDir(const char *dir) {}
 void PokeMini_GetCurrentDir(void) {}
 void PokeMini_GotoCurrentDir(void) {}
 void PokeMini_GotoExecDir(void) {}
