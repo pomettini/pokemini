@@ -184,12 +184,16 @@ static void init_expand_lut(void)
 //
 // PM games fake gray shades by toggling pixels every native frame (72 Hz).
 // On a 1-bit panel that's just visible flicker. To suppress it we run the
-// emulator in LCDMODE_3SHADES (which copies the previous PRC frame's pixels
-// into LCDPixelsA) and classify each pixel into 3 buckets:
-//   - on in both frames  -> always show on
-//   - off in both frames -> always show off
-//   - flickering         -> show stable checkerboard (perceived as gray)
-// The checkerboard alternates per row so the spatial pattern is even.
+// emulator in LCDMODE_ANALOG: MinxLCD_DecayRefresh keeps a 4-frame history
+// per pixel and writes a smoothed brightness value (0..255) into LCDPixelsA,
+// interpolated between MinxLCD.Pixel0Intensity and Pixel1Intensity.
+//
+// Thresholds split that into three buckets per pixel:
+//   - >= t_on  (~3 frames lit)  -> solid on
+//   - <  t_off (~1 frame  lit)  -> solid off
+//   - between                   -> checkerboard dither
+// The 4-frame history makes moving "gray" sprites fade in/out smoothly
+// instead of dithering on both edges as they slide.
 static void render_screen(void)
 {
 	if (!LCDDirty) return;
@@ -199,35 +203,41 @@ static void render_screen(void)
 	const int byte_x = SCREEN_X / 8;  // 7
 	const int pm_bytes = PM_W / 8;    // 12
 
+	// Thresholds adapt to the game's current contrast setting (Pixel0/Pixel1
+	// intensities change with MinxLCD.Contrast). Boundaries at level 1.5 and
+	// level 2.5 of the 5-level interpolation: 3/8 and 5/8 of the span.
+	const int p0 = MinxLCD.Pixel0Intensity;
+	const int p1 = MinxLCD.Pixel1Intensity;
+	const int span = p1 - p0;
+	const uint8_t t_off = (uint8_t)(p0 + (3 * span) / 8);
+	const uint8_t t_on  = (uint8_t)(p0 + (5 * span) / 8);
+
 	for (int y = 0; y < PM_H; y++) {
-		const uint8_t *srcD = &LCDPixelsD[y * PM_W];
 		const uint8_t *srcA = &LCDPixelsA[y * PM_W];
 		uint8_t *dst0 = fb + (SCREEN_Y + y * PM_SCALE)     * LCD_ROWSIZE + byte_x;
 		uint8_t *dst1 = dst0 + LCD_ROWSIZE;
 		uint8_t *dst2 = dst1 + LCD_ROWSIZE;
 
-		// Per-row dither mask: bit set means "this column lights up when the
-		// pixel is flickering." Alternates between rows for a checkerboard.
 		const uint8_t dither = (y & 1) ? 0xAA : 0x55;
 
 		for (int bx = 0; bx < pm_bytes; bx++) {
-			// "both" byte: pixel on in current AND previous frame (steady on).
-			uint8_t both =
-				((srcD[0] & srcA[0]) << 7) | ((srcD[1] & srcA[1]) << 6) |
-				((srcD[2] & srcA[2]) << 5) | ((srcD[3] & srcA[3]) << 4) |
-				((srcD[4] & srcA[4]) << 3) | ((srcD[5] & srcA[5]) << 2) |
-				((srcD[6] & srcA[6]) << 1) | ((srcD[7] & srcA[7])     );
-			// "either" byte: pixel on in current OR previous frame.
-			uint8_t either =
-				((srcD[0] | srcA[0]) << 7) | ((srcD[1] | srcA[1]) << 6) |
-				((srcD[2] | srcA[2]) << 5) | ((srcD[3] | srcA[3]) << 4) |
-				((srcD[4] | srcA[4]) << 3) | ((srcD[5] | srcA[5]) << 2) |
-				((srcD[6] | srcA[6]) << 1) | ((srcD[7] | srcA[7])     );
-			srcD += 8; srcA += 8;
+			// "high" byte: pixels brighter than the on threshold (always on).
+			uint8_t high =
+				((srcA[0] >= t_on) << 7) | ((srcA[1] >= t_on) << 6) |
+				((srcA[2] >= t_on) << 5) | ((srcA[3] >= t_on) << 4) |
+				((srcA[4] >= t_on) << 3) | ((srcA[5] >= t_on) << 2) |
+				((srcA[6] >= t_on) << 1) | ((srcA[7] >= t_on)     );
+			// "mid" byte: pixels brighter than the off threshold (dither candidates).
+			uint8_t mid =
+				((srcA[0] >= t_off) << 7) | ((srcA[1] >= t_off) << 6) |
+				((srcA[2] >= t_off) << 5) | ((srcA[3] >= t_off) << 4) |
+				((srcA[4] >= t_off) << 3) | ((srcA[5] >= t_off) << 2) |
+				((srcA[6] >= t_off) << 1) | ((srcA[7] >= t_off)     );
+			srcA += 8;
 
-			// On = always-on pixels, plus flickering pixels gated by dither.
+			// On = always-on pixels, plus mid pixels gated by dither.
 			// Invert to get "off" mask (Playdate: bit set = white = pixel off).
-			uint8_t b = (uint8_t)~(both | (either & dither));
+			uint8_t b = (uint8_t)~(high | (mid & dither));
 
 			// Expand to 3 Playdate bytes, replicate across 3 vertical-scale rows.
 			const uint8_t *e = expand_lut[b];
@@ -285,10 +295,11 @@ int eventHandler(PlaydateAPI *playdate, PDSystemEvent event, uint32_t arg)
 		CommandLineInit();
 		CommandLine.sound      = 1;
 		CommandLine.lcdfilter  = 0;
-		// LCDMODE_3SHADES so the emulator core captures the previous PRC frame
-		// into LCDPixelsA (Hardware.c:333). render_screen ORs current+previous
-		// to suppress the flicker PM games use to fake gray on a 1-bit panel.
-		CommandLine.lcdmode    = LCDMODE_3SHADES;
+		// LCDMODE_ANALOG so MinxLCD_DecayRefresh writes a 4-frame smoothed
+		// brightness into LCDPixelsA (Hardware.c:335). render_screen thresholds
+		// that to suppress flicker and give moving "gray" sprites a soft fade
+		// instead of dither smear. See render_screen for the threshold logic.
+		CommandLine.lcdmode    = LCDMODE_ANALOG;
 		CommandLine.synccycles = 512;
 
 		JoystickSetup("Playdate", 0, 30000, PD_KeysNames, 7, PD_KeysMapping);

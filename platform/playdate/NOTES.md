@@ -239,12 +239,94 @@ If perf regresses:
   Removing it costs ~10% emulator throughput.
 - `pd->display->setRefreshRate(30)` — stays at 30. PM at 72 Hz doesn't
   divide evenly into anything the Playdate panel comfortably runs.
-- `pd->system->drawFPS(0,0)` — kept as a permanent overlay. Trivial cost.
-  Remove the call if you want it gone.
+- `CommandLine.lcdmode` — currently `LCDMODE_ANALOG`. Adds ~2-3% CPU vs
+  `LCDMODE_2SHADES` (DecayRefresh runs every PRC frame) but is the only
+  mode that gives smooth gray-suppression under motion. See next section.
 
 Things **not** worth changing: the audio path (already callback-driven
 like NDS), the `LCDDirty` early-return in `render_screen`, the 12/5
 fractional pacing pattern.
+
+## LCD shading / dither suppression (2026-05-03)
+
+PM games fake gray by toggling pixels every native frame (72 Hz). Real
+PM hardware blurs the flicker into perceived gray via slow LCD response;
+Playdate's fast 1-bit panel doesn't, so without intervention the player
+sees raw flicker. The journey through five approaches below; the final
+one (LCDMODE_ANALOG with thresholded checkerboard) is what's in the code.
+
+Quick pick: if you're tweaking, the threshold values `t_off` and `t_on`
+in `render_screen` are the main knobs (currently 3/8 and 5/8 of the
+contrast span). Tightening the gap = less dither, more "binary"; widening
+= softer fades, more dither.
+
+### Approaches tried, in order
+
+1. **`LCDMODE_2SHADES`, raw current frame** (the original port). Just
+   render `LCDPixelsD[i]`. Pixels flicker visibly because that's literally
+   what the game writes.
+2. **`LCDMODE_3SHADES`, OR current+previous**. Pixel renders on if
+   either current or previous PRC frame had it lit. Dithered "gray"
+   regions become solid filled — too dark, looks like everything is
+   "always on."
+3. **`LCDMODE_3SHADES`, AND current+previous**. Pixel renders on only
+   if both frames had it lit. Dithered "gray" regions disappear entirely
+   — sprites that intentionally flicker for shading become invisible.
+4. **`LCDMODE_3SHADES`, checkerboard for flicker** (good for static).
+   `pixelOn = both | (either & dither)`. Steady-on stays on, steady-off
+   stays off, flickering pixels render in a row-alternating checkerboard
+   pattern (mask 0xAA / 0x55 by row parity). Static gray fills look
+   convincing — the spatial dither reads as gray. **But moving gray
+   sprites smear**: leading edge (off→on) and trailing edge (on→off)
+   both register as "flickering" and pick up dither, while the dither
+   pattern itself is fixed to screen position so it appears to crawl
+   across the moving sprite.
+5. **`LCDMODE_ANALOG`, thresholded checkerboard** (final). The emulator
+   keeps a 4-bit per-pixel history (`LCDPixelsAS`, MinxLCD.c:222–223) and
+   `MinxLCD_DecayRefresh` (MinxLCD.c:215) writes a 5-level smoothed value
+   into `LCDPixelsA` interpolated between the game's contrast intensities.
+   `render_screen` computes `t_off` and `t_on` from those intensities each
+   call (3/8 and 5/8 of the span — boundaries at level 1.5 and 2.5):
+   - A ≥ t_on  → solid on  (lit ≥3 of last 4 PRC frames)
+   - A ≥ t_off → checkerboard (level 2)
+   - else      → solid off
+
+   Moving gray sprite: leading edge needs 2 frames to cross t_off, so it
+   fades in instead of dithering. Trailing edge fades out through dither
+   to off over 3 frames. Reads as motion blur instead of dither smear.
+   Static gray still hits level 2 → dither → unchanged from approach 4.
+
+### Why thresholds adapt to contrast
+
+`MinxLCD.Pixel0Intensity` and `Pixel1Intensity` are *not* fixed at 0/255
+— they're table-driven by the game's contrast register
+(MinxLCD_ContrastLvl, MinxLCD.c:531). At low contrast both values
+collapse toward the middle (e.g. `{240, 255}` at register 0x37+), so
+hardcoded byte thresholds like 64/192 stop working. Computing `t_off`
+and `t_on` from the live `Pixel0Intensity`/`Pixel1Intensity` keeps the
+3-bucket split correct regardless of what the game does.
+
+### Performance cost
+
+`MinxLCD_DecayRefresh` runs ~6144 iterations per PRC frame at 72 Hz,
+roughly 60K instructions × 72 = 4.3M instr/sec ≈ ~2-3% of CPU. Light
+scenes still hit 100% real speed; heavy scenes drop from 93% to ~91%.
+`render_screen` itself is the same shape (still 2 packs per byte +
+some bitwise ops), no measurable change vs approach 4.
+
+### What was deliberately not done
+
+- **Per-frame mode switching** (e.g. 2-shade during boot, ANALOG in-game).
+  Tried it: detect "boot done" by waiting for `MinxCPU.PC.D >= 0x2100`
+  (freebios.asm:187 does `jmp @00002102` to hand off). Boot rendered
+  cleanly but the transition wasn't worth the complexity — reverted.
+- **Multi-level dither** (different dither densities per brightness band).
+  Would give smoother gradients, requires per-pixel position-dependent
+  threshold lookups (Bayer matrix), breaks the byte-pack speedup. Not
+  attempted — current 1-bucket dither already looks good.
+- **Wider history** beyond 4 frames. The PM's dither cycles at 2-frame
+  period; 4 is enough to distinguish steady gray from transient. Going
+  longer makes motion ghost more without improving steady-state look.
 
 ## Save state / EEPROM
 
