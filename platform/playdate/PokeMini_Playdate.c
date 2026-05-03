@@ -180,7 +180,16 @@ static void init_expand_lut(void)
 // Blit the PM 96x64 frame into the Playdate 400x240 1-bit framebuffer at 3x
 // integer scale, centered at (SCREEN_X, SCREEN_Y).  SCREEN_X (56) is byte-
 // aligned (56 = 7*8), so each row writes 36 bytes starting at fb + row*RS + 7.
-// 0 in LCDPixelsD = pixel off = light = white = bit set on Playdate.
+// 0 in LCDPixelsD/A = pixel off = light = white = bit set on Playdate.
+//
+// PM games fake gray shades by toggling pixels every native frame (72 Hz).
+// On a 1-bit panel that's just visible flicker. To suppress it we run the
+// emulator in LCDMODE_3SHADES (which copies the previous PRC frame's pixels
+// into LCDPixelsA) and classify each pixel into 3 buckets:
+//   - on in both frames  -> always show on
+//   - off in both frames -> always show off
+//   - flickering         -> show stable checkerboard (perceived as gray)
+// The checkerboard alternates per row so the spatial pattern is even.
 static void render_screen(void)
 {
 	if (!LCDDirty) return;
@@ -191,19 +200,34 @@ static void render_screen(void)
 	const int pm_bytes = PM_W / 8;    // 12
 
 	for (int y = 0; y < PM_H; y++) {
-		const uint8_t *src = &LCDPixelsD[y * PM_W];
+		const uint8_t *srcD = &LCDPixelsD[y * PM_W];
+		const uint8_t *srcA = &LCDPixelsA[y * PM_W];
 		uint8_t *dst0 = fb + (SCREEN_Y + y * PM_SCALE)     * LCD_ROWSIZE + byte_x;
 		uint8_t *dst1 = dst0 + LCD_ROWSIZE;
 		uint8_t *dst2 = dst1 + LCD_ROWSIZE;
 
+		// Per-row dither mask: bit set means "this column lights up when the
+		// pixel is flickering." Alternates between rows for a checkerboard.
+		const uint8_t dither = (y & 1) ? 0xAA : 0x55;
+
 		for (int bx = 0; bx < pm_bytes; bx++) {
-			// Branchless pack: 8 PM pixels -> 1 byte (bit set when pixel is 0/off).
-			uint8_t b =
-				((src[0] == 0) << 7) | ((src[1] == 0) << 6) |
-				((src[2] == 0) << 5) | ((src[3] == 0) << 4) |
-				((src[4] == 0) << 3) | ((src[5] == 0) << 2) |
-				((src[6] == 0) << 1) | ((src[7] == 0)     );
-			src += 8;
+			// "both" byte: pixel on in current AND previous frame (steady on).
+			uint8_t both =
+				((srcD[0] & srcA[0]) << 7) | ((srcD[1] & srcA[1]) << 6) |
+				((srcD[2] & srcA[2]) << 5) | ((srcD[3] & srcA[3]) << 4) |
+				((srcD[4] & srcA[4]) << 3) | ((srcD[5] & srcA[5]) << 2) |
+				((srcD[6] & srcA[6]) << 1) | ((srcD[7] & srcA[7])     );
+			// "either" byte: pixel on in current OR previous frame.
+			uint8_t either =
+				((srcD[0] | srcA[0]) << 7) | ((srcD[1] | srcA[1]) << 6) |
+				((srcD[2] | srcA[2]) << 5) | ((srcD[3] | srcA[3]) << 4) |
+				((srcD[4] | srcA[4]) << 3) | ((srcD[5] | srcA[5]) << 2) |
+				((srcD[6] | srcA[6]) << 1) | ((srcD[7] | srcA[7])     );
+			srcD += 8; srcA += 8;
+
+			// On = always-on pixels, plus flickering pixels gated by dither.
+			// Invert to get "off" mask (Playdate: bit set = white = pixel off).
+			uint8_t b = (uint8_t)~(both | (either & dither));
 
 			// Expand to 3 Playdate bytes, replicate across 3 vertical-scale rows.
 			const uint8_t *e = expand_lut[b];
@@ -239,8 +263,6 @@ static int update(void *userdata)
 	handle_input();
 	render_screen();
 
-	pd->system->drawFPS(0, 0);
-
 	return 1;
 }
 
@@ -263,7 +285,10 @@ int eventHandler(PlaydateAPI *playdate, PDSystemEvent event, uint32_t arg)
 		CommandLineInit();
 		CommandLine.sound      = 1;
 		CommandLine.lcdfilter  = 0;
-		CommandLine.lcdmode    = LCDMODE_2SHADES;
+		// LCDMODE_3SHADES so the emulator core captures the previous PRC frame
+		// into LCDPixelsA (Hardware.c:333). render_screen ORs current+previous
+		// to suppress the flicker PM games use to fake gray on a 1-bit panel.
+		CommandLine.lcdmode    = LCDMODE_3SHADES;
 		CommandLine.synccycles = 512;
 
 		JoystickSetup("Playdate", 0, 30000, PD_KeysNames, 7, PD_KeysMapping);
