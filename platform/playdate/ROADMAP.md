@@ -69,13 +69,17 @@ Still rough; remaining work is mostly polish:
   may briefly persist if the previous ROM was emitting one. Pause/
   mute on transition is queued in §2b/§3c.
 
-### 1d. License + attribution
-PokéMini is GPLv3. The repo has the upstream license but the Playdate
-release should ship with a clearly visible:
-- `LICENSE` file in the bundle's `Source/` (or accessible via in-game
-  About screen).
-- Credits screen listing JustBurn (upstream) + this port author + the
-  freeBIOS author.
+### 1d. License + attribution — partially done
+- `Source/LICENSE` added: full GPLv3 text with a header crediting
+  JustBurn (PokeMini core), Giorgio Pomettini (Playdate port), and
+  Team Pokeme (freeBIOS, freeware/public domain). `pdc` bundles it
+  into the `.pdx` automatically.
+
+Still pending: a **Credits screen** in-app (or About entry in the
+system menu) so users see attribution without having to open the
+`.pdx` directory. Lightweight version is just an `addMenuItem("About",
+...)` that draws the same credits text on a frame and waits for B
+to dismiss.
 
 ### 1e. Card art and pdxinfo polish — partially done
 Metadata (`name`, `author=Pomettini & JustBurn`, `description`,
