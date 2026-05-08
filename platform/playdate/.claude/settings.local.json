@@ -23,7 +23,17 @@
       "Bash(/Users/pomettini/Developer/PlaydateSDK/bin/pdutil list *)",
       "Bash(diskutil eject *)",
       "Bash(sudo ls *)",
-      "Read(//Users/pomettini/Developer/PlaydateSDK/C_API/buildsupport/**)"
+      "Read(//Users/pomettini/Developer/PlaydateSDK/C_API/buildsupport/**)",
+      "WebSearch",
+      "WebFetch(domain:devforum.play.date)",
+      "WebFetch(domain:sdk.play.date)",
+      "Bash(find /Users/pomettini/Developer/PlaydateSDK -name \"pd_api*.h\" 2>/dev/null | head -5)",
+      "Read(//Users/pomettini/Developer/PlaydateSDK/**)",
+      "Bash(mkdir -p /Users/pomettini/Git/pokemini/platform/playdate/build-device)",
+      "Bash(PLAYDATE_SDK_PATH=/Users/pomettini/Developer/PlaydateSDK cmake -DCMAKE_TOOLCHAIN_FILE=/Users/pomettini/Developer/PlaydateSDK/C_API/buildsupport/arm.cmake -DCMAKE_BUILD_TYPE=Release ..)",
+      "Bash(PLAYDATE_SDK_PATH=/Users/pomettini/Developer/PlaydateSDK cmake --build .)",
+      "Bash(cmake --build . --target PokeMini_pdx)",
+      "Bash(cmake --build . --clean-first)"
     ]
   }
 }

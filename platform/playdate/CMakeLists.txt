@@ -26,7 +26,10 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 set(PLAYDATE_GAME_NAME PokeMini)
-set(PLAYDATE_GAME_DEVICE PokeMini_DEVICE)
+# Device build also produces PokeMini.pdx (no _DEVICE suffix). The two cmake
+# branches (sim/device) are mutually exclusive per build dir, so reusing the
+# same target name is fine.
+set(PLAYDATE_GAME_DEVICE PokeMini)
 
 project(${PLAYDATE_GAME_NAME} C ASM)
 

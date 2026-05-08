@@ -6,17 +6,51 @@ non-obvious is discovered. Newest entries on top.
 
 ## Build commands
 
+The only artifact that ships is **`PokeMini.pdx`**. Both build branches
+(device and sim) produce a `.pdx` with that exact name — they're meant
+to be alternatives, not coexist. The device build is the canonical one;
+the sim build exists only as a desktop dev convenience.
+
+### Device build (the one that ships)
+
 ```
-rm -rf build build-device PokeMini.pdx PokeMini_DEVICE.pdx
-mkdir build && cd build && cmake .. && make && cd ..
+rm -rf build-device PokeMini.pdx
 mkdir build-device && cd build-device && \
     cmake .. -DTOOLCHAIN=armgcc \
         -DCMAKE_TOOLCHAIN_FILE=$PLAYDATE_SDK_PATH/C_API/buildsupport/arm.cmake && \
     make && cd ..
 ```
 
-`PokeMini.pdx/pdex.dylib` is the simulator binary. `PokeMini_DEVICE.pdx/pdex.bin`
-is the device binary. Upload `PokeMini_DEVICE.pdx` to the device.
+Output: `PokeMini.pdx/pdex.bin` (the ARM device binary, packed by `pdc`).
+Sideload that `.pdx` to the Playdate.
+
+`PLAYDATE_SDK_PATH` must be **exported** in the shell — the
+`-DCMAKE_TOOLCHAIN_FILE=$PLAYDATE_SDK_PATH/...` shell-expansion fails
+silently if it's unset (this user's shell rc doesn't export it; the sim
+build can fall back via `~/.Playdate/config`, but the device build can't).
+
+### Sim build (optional, desktop dev convenience)
+
+```
+rm -rf build PokeMini.pdx
+mkdir build && cd build && cmake .. && make && cd ..
+```
+
+Output: `PokeMini.pdx/pdex.dylib`. Open the `.pdx` in the Playdate
+Simulator app on macOS.
+
+### Common gotchas
+
+- **Don't run both builds against the same `Source/`.** `pdc` bundles
+  whatever's in `Source/` at the moment it runs (`pdex.elf` for device,
+  `pdex.dylib` for sim). If you've previously built the other target,
+  the leftover binary will be packed alongside the current one. The
+  resulting `.pdx` is technically still valid, but the file gets
+  bigger for no reason and stale-binary debugging gets confusing —
+  see the "stale `Source/pdex.elf`" gotcha in the active-gotchas list
+  below.
+- **`build-device/`, not `build/`, is the device build dir.** Cleaning
+  only `build/` doesn't clean device output.
 
 ## The "device-only" bug pattern
 
@@ -89,6 +123,40 @@ means "black".
 **Fix**: call `init_expand_lut()` once in `kEventInit` before the first
 `render_screen()`.
 
+### 5. ROMs in `/Shared/` invisible because `kFileRead` only searches the bundle (fixed)
+**Symptom**: ROMs visibly present at `/Shared/Emulation/pm/games/` on the
+device (verified via USB), but the app reports "no ROMs found" and falls
+through to the FreeBIOS no-cart splash. Worked fine in the simulator
+when `.min` files were dropped into the app's Data folder.
+
+**Root cause**: `pd->file->open(path, kFileRead)` searches **only the
+read-only pdx bundle**, not the data side of the filesystem. Per the
+SDK file API:
+
+| flag                      | searches                                  |
+| ---                       | ---                                       |
+| `kFileRead`               | game pdx (read-only bundle)               |
+| `kFileReadData`           | game data folder                          |
+| `kFileRead\|kFileReadData`| data folder first, falls back to bundle   |
+| `kFileWrite` / `kFileAppend` | always writes to data folder           |
+
+The cross-app `/Shared/` folder (added in Playdate firmware/SDK 2.4,
+mkdir/stat fixed in 2.4.1) is reached via the data side. With
+`kFileRead` alone, every ROM in `/Shared/...` silently fails to open —
+no error, just `NULL` returned. The app then loaded FreeBIOS only and
+displayed its built-in "no cart" screen, which is the symptom the user
+saw.
+
+**Fix**: open ROMs with `kFileRead | kFileReadData`. Both bundle and
+`/Shared/` work; the bundle search is harmless overhead. Same flag is
+the right default for any "open this file by user-supplied path" case
+in this codebase.
+
+**Diagnostic worth keeping in mind**: `pd->file->geterr()` returns the
+last file-API error string. `pd->file->stat(path, &st)` is a cheap way
+to check whether a directory exists before listing it — useful for
+distinguishing "path didn't route correctly" from "directory is empty."
+
 ### 4. `render_screen` early-return on `!LCDDirty` was a red herring
 **Symptom thought to be**: black screen because `LCDDirty` is 0.
 
@@ -109,7 +177,19 @@ early-return is safe and worth keeping for performance.
 ## Active gotchas / things to remember
 
 - **The device build is in `build-device/`, not `build/`.** Cleaning only
-  `build/` leaves a stale `PokeMini_DEVICE.pdx` that can mask new fixes.
+  `build/` leaves stale device output in `Source/pdex.elf` that can
+  mask new fixes.
+- **Stale `Source/pdex.elf` gotcha.** `pdc` packs whatever it finds in
+  `Source/` into the `.pdx` — it does NOT trigger a rebuild of the
+  binaries. So if you've ever run the sim build (or just have a leftover
+  `pdex.elf` from a previous device build), `pdc` will happily bundle
+  that **stale** `pdex.elf` into the new `.pdx`. The simulator branch
+  picks up new C edits via its own `pdex.dylib`; the device runs the old
+  code. The "works on sim, broken on device" symptom looks like a real
+  device bug but has nothing to do with the device target. Either:
+  (a) clean `Source/pdex.elf` and `build-device/` together before each
+  device build, or (b) check `Source/pdex.elf`'s mtime against
+  `PokeMini_Playdate.c`'s before sideloading.
 - **Soft reset vs hard reset**: `PokeMini_Reset(0)` does a soft reset.
   This does NOT clear PM_RAM (only `PokeMini_Create` and hard reset do).
   After `PokeMini_Create`, RAM is `0xFF` everywhere. The freebios `sreset`

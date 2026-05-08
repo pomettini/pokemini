@@ -1,9 +1,9 @@
 name=PokeMini
-author=JustBurn
-description=Pokemon Mini Emulator
-bundleID=com.pokemini.playdate
-version=0.6.0
+author=Pomettini & JustBurn
+description=A Pokemon Mini emulator
+bundleID=com.pomettini.pokemini
+version=0.1.0
 buildNumber=1
 imagePath=
 pdxversion=30005
-buildtime=831087579
+buildtime=831595152
