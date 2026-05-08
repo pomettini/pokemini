@@ -6,37 +6,62 @@ others would actually use. Roughly ordered by ship-blocker → polish.
 The emulator core (CPU, PRC, audio, video) and the timing layer are done.
 Everything below is integration, UX, and distribution work.
 
+## ROM storage convention
+
+ROMs on device are loaded from **`/Shared/Emulation/pm/games/`**, following
+CrankBoy's cross-emulator convention. The Playdate firmware exposes a
+top-level `/Shared/` folder accessible to all games (added in SDK 2.4,
+mkdir/stat/etc fixed in 2.4.1). The app `mkdir`s the path tree on first
+launch so a fresh install lands the user in a known, writable location
+they can sideload ROMs into.
+
+When opening files there, use `kFileRead | kFileReadData` — `kFileRead`
+alone only searches the read-only pdx bundle and silently misses
+everything in `/Shared/`.
+
+If `/Shared/Emulation/pm/games/` is empty, the emulator boots with
+FreeBIOS only; FreeBIOS already shows a "no ROM" splash, which is a
+better default than a custom homebrew demo.
+
+EEPROM saves and save states stay in the app's own
+`/Data/com.pomettini.pokemini/` — those are emulator-private and should
+not be shared.
+
 ## 1. Ship blockers (cannot release without)
 
-### 1a. Remove bundled ROM
-`platform/playdate/Source/` currently contains `game.min` and
-`lunch_time.min` — these are **copyrighted Pokémon Mini cartridges** and
-shipping the `.pdx` with them in the bundle is straightforward
-infringement. The release `.pdx` must contain freebios only; users place
-their own ROM dumps into the Playdate Data folder
-(`/Data/com.pokemini.playdate/` on device) post-install.
+### 1a. Remove bundled ROM — done
+`platform/playdate/Source/` previously contained `game.min` and
+`lunch_time.min` (copyrighted Pokémon Mini cartridges). Those are gone.
+`boot.min` (homebrew demo) is no longer used — when no user ROM is
+present we boot FreeBIOS, which has its own splash that's nicer than
+the demo. The file can stay in `Source/` for ad-hoc developer testing
+or be deleted entirely; the C code no longer references it.
 
-CMakeLists.txt currently copies whatever's in `Source/` into the bundle
-— need a `.gitignore` for `*.min` and a clean `Source/` policy.
+Remaining sub-task: add `Source/*.min` to `.gitignore` so casual local
+ROM copies don't get committed.
 
 ### 1b. EEPROM save/load on device
 `PokeMini_Playdate.c:390` notes that EEPROM save uses `fopen` (works on
 simulator, silent fail on device). `load_rom` already uses `pd->file->*`
 APIs correctly — the same pattern needs to wire into PokeMini's
 `PokeMini_CustomSaveEEPROM` / `PokeMini_CustomLoadEEPROM` callback hooks.
-Path scheme: `/Data/com.pokemini.playdate/eeprom/<rom_basename>.eep`.
+Path scheme: `/Data/com.pomettini.pokemini/eeprom/<rom_basename>.eep`.
 
 Without this, players lose all in-game progress whenever the app exits
 — ship-blocker for any RPG-style game.
 
 ### 1c. ROM picker (when more than one ROM is present)
 Currently hardcoded `load_rom("game.min")`. For a real release:
-- Enumerate `*.min` files from the Data directory at startup
-  (`pd->file->listfiles`)
-- If 0 found: show a friendly "place your ROMs in
-  `/Data/com.pokemini.playdate/` and restart" screen with the actual
-  device path printed.
-- If 1 found: load it directly (current behavior, just dynamic name).
+- On boot, `pd->file->mkdir("/Shared/Emulation/pm/games/")` if it
+  doesn't already exist (CrankBoy convention — see top of file).
+- Enumerate `*.min` files from `/Shared/Emulation/pm/games/` at startup
+  (`pd->file->listfiles`).
+- If 0 found: load the bundled `boot.min` fallback so the app still
+  does *something*, and show a small "place your ROMs in
+  `/Shared/Emulation/pm/games/` and restart" hint somewhere
+  unobtrusive (corner overlay or About screen) with the actual device
+  path printed.
+- If 1 found: load it directly.
 - If 2+ found: simple list-picker UI before booting the emulator.
 
 ### 1d. License + attribution
@@ -47,14 +72,14 @@ release should ship with a clearly visible:
 - Credits screen listing JustBurn (upstream) + this port author + the
   freeBIOS author.
 
-### 1e. Card art and pdxinfo polish
-`Source/pdxinfo` currently has `imagePath=` (empty). Playdate's launcher
-shows a generic icon. Need at least:
+### 1e. Card art and pdxinfo polish — partially done
+Metadata (`name`, `author=Pomettini & JustBurn`, `description`,
+`bundleID=com.pomettini.pokemini`, version) is now correct.
+
+Still pending — the graphical assets (work in progress):
 - A 350×155 launch card image (`launchImage` in pdxinfo).
 - A 32×32 menu icon.
-- Updated `author=` (currently "JustBurn" — should reflect the port author
-  with credit to upstream).
-- `description=` that actually describes what it is.
+- Wire up `imagePath=` once the card art is finalized.
 
 ## 2. Important UX (would feel broken without)
 
@@ -107,23 +132,26 @@ PokéMini already has full save/load state code (`POKELOADSS_*` /
 `POKESAVESS_*` in every component). Wire it up:
 - Bind to system menu items: "Save state slot 1/2/3", "Load state slot
   1/2/3".
-- Path: `/Data/com.pokemini.playdate/states/<rom_basename>.s1` etc.
+- Path: `/Data/com.pomettini.pokemini/states/<rom_basename>.s1` etc.
+  (emulator-private — not in `/Shared/`).
 - Include a thumbnail in each save (optional; can just be a screenshot).
 
 ## 3. Quality polish (release-grade feel)
 
 ### 3a. Per-ROM data isolation
 Currently EEPROM and save states (when added) live in flat directories.
-Better: `/Data/.../<rom_basename>/eeprom.eep`, `.../states/`, etc.
-Multiple ROMs with the same internal name don't clobber each other.
+Better: `/Data/com.pomettini.pokemini/<rom_basename>/eeprom.eep`,
+`.../states/`, etc. Multiple ROMs with the same internal name don't
+clobber each other.
 
 ### 3b. Empty-state UI
-First-launch flow when no ROM is present needs to be friendly:
-- Detect zero-ROM state, draw a "How to add ROMs" screen with the actual
-  device data path (`pd->system->getCurrentTimeMilliseconds` is unrelated
-  but `getDeviceUUID` and similar can help resolve the path) and a hint
-  about file extension `.min`.
-- Don't crash, don't leave a black screen.
+With the `boot.min` fallback in place, the app no longer black-screens
+when `/Shared/Emulation/pm/games/` is empty — but the user should still
+be told *why* they're seeing the demo ROM and how to load real games:
+- When falling back to bundled `boot.min`, surface a small hint
+  ("Drop `.min` ROMs into `/Shared/Emulation/pm/games/`") via a one-shot
+  toast or About-screen entry. Don't be intrusive; the demo is playable.
+- Don't crash on a bad ROM in that directory either — see 3d.
 
 ### 3c. Background/foreground audio handling
 Audio source created in `eventHandler`'s `kEventInit` should be torn
@@ -152,10 +180,13 @@ fractional-pacing loop.
 
 ## 4. Code/build hygiene
 
-### 4a. Remove the lingering test ROM
-`Source/game.min` and `Source/lunch_time.min` need to leave the source
-tree. Add `Source/*.min` to `.gitignore`. CMakeLists could either skip
-copying `*.min` (cleaner) or accept it as a dev-only convenience.
+### 4a. Remove the lingering test ROM — done
+`Source/game.min` and `Source/lunch_time.min` are gone from the tree.
+`Source/boot.min` is no longer loaded by the C code (see 1a) — it can
+be removed in a follow-up cleanup or kept for ad-hoc dev testing.
+
+Follow-up: confirm `.gitignore` ignores `*.min` so casual local copies
+of copyrighted ROMs don't get committed.
 
 ### 4b. README for the platform
 `platform/playdate/` has `NOTES.md` (development notes) and `ROADMAP.md`
@@ -195,13 +226,17 @@ pointer. Could remove the SetVideo call entirely and shave a few KB.
 ## Suggested order
 
 A reasonable shipping path:
-1. **1a, 1d, 4a, 4b** — clean repo, get LICENSE/README right (an afternoon)
-2. **1b** — EEPROM persistence (a few hours, biggest player-facing win)
-3. **2b, 3c** — pause/resume handling (an hour each)
-4. **1c, 3a, 3b** — ROM picker + per-ROM data + empty-state (a day)
-5. **2a, 2c, 2d** — controls (C button), accelerometer shake, settings
+1. ~~**1a, 4a**~~ — copyrighted ROMs removed, `boot.min` retained as fallback. ✅
+2. **1d, 4b** — LICENSE + README pass (an afternoon)
+3. **1c, 3b** — `mkdir /Shared/Emulation/pm/games/`, list/pick ROMs,
+   fall back to `boot.min` if empty (half day)
+4. **1b** — EEPROM persistence (a few hours, biggest player-facing win)
+5. **2b, 3c** — pause/resume handling (an hour each)
+6. **3a** — per-ROM data isolation (a few hours)
+7. **2a, 2c, 2d** — controls (C button), accelerometer shake, settings
    menu with the above wired in (a day)
-6. **2e, 1e** — save states + card art (half day)
-7. **3d, 3e, 3f** — polish pass (as time allows)
+8. **2e, 1e** — save states + card art once graphics are ready
+   (half day)
+9. **3d, 3e, 3f** — polish pass (as time allows)
 
-That's roughly 3-4 days of focused work to a v1.0 release.
+That's roughly 2-3 days of focused work to a v1.0 release from here.
