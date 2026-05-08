@@ -124,6 +124,13 @@ static int load_rom(const char *path)
 		return 0;
 	}
 
+	// Free the previous ROM's buffer before allocating a new one — picking a
+	// second ROM without this leaks the first.
+	if (rom_buf) {
+		free(rom_buf);
+		rom_buf = NULL;
+	}
+
 	rom_buf = (uint8_t *)malloc((size_t)size);
 	if (!rom_buf) {
 		pd->file->close(f);
@@ -424,6 +431,23 @@ static void start_emulation_with_rom(const char *path)
 	app_mode = MODE_EMULATOR;
 }
 
+// Switch back to the picker. Called from the Playdate system menu so the
+// player can change ROM without quitting the app. We don't rescan
+// /Shared/... because connecting USB to add ROMs suspends the app — when
+// the user re-launches, scan_rom_dir runs again from kEventInit.
+static void return_to_picker(void)
+{
+	rom_cursor = 0;
+	rom_view_top = 0;
+	app_mode = MODE_PICKER;
+}
+
+static void menu_item_picker_cb(void *userdata)
+{
+	(void)userdata;
+	return_to_picker();
+}
+
 static void picker_update(void)
 {
 	PDButtons cur, pushed, released;
@@ -539,16 +563,24 @@ int eventHandler(PlaydateAPI *playdate, PDSystemEvent event, uint32_t arg)
 		// up MinxAudio's state is idle so the source emits silence.
 		audio_source = pd->sound->addSource(audio_callback, NULL, 0);
 
-		// Scan /Shared/Emulation/pm/games/ for *.min ROMs. Empty -> auto-load
-		// the bundled boot.min fallback so a fresh install still boots into
-		// something playable.
+		// System menu item: lets the player return to the ROM picker without
+		// quitting the app. Persists for the lifetime of the process.
+		pd->system->addMenuItem("ROM Picker", menu_item_picker_cb, NULL);
+
+		// Scan /Shared/Emulation/pm/games/ for *.min ROMs.
+		// 0 ROMs -> boot FreeBIOS only (its own no-cart splash).
+		// 1 ROM  -> auto-load it; no point showing a one-item picker.
+		// 2+     -> show the picker.
 		scan_rom_dir();
 		pd->system->logToConsole("%s: %d ROM(s) in %s",
 			AppName, rom_count, ROM_DIR);
 
 		if (rom_count == 0) {
-			// Empty -> let FreeBIOS show its own no-ROM splash
 			start_emulation_with_rom(NULL);
+		} else if (rom_count == 1) {
+			char path[MAX_ROM_NAME + 64];
+			snprintf(path, sizeof(path), "%s%s", ROM_DIR, rom_names[0]);
+			start_emulation_with_rom(path);
 		} else {
 			app_mode = MODE_PICKER;
 		}

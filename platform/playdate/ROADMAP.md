@@ -50,19 +50,24 @@ Path scheme: `/Data/com.pomettini.pokemini/eeprom/<rom_basename>.eep`.
 Without this, players lose all in-game progress whenever the app exits
 — ship-blocker for any RPG-style game.
 
-### 1c. ROM picker (when more than one ROM is present)
-Currently hardcoded `load_rom("game.min")`. For a real release:
-- On boot, `pd->file->mkdir("/Shared/Emulation/pm/games/")` if it
-  doesn't already exist (CrankBoy convention — see top of file).
-- Enumerate `*.min` files from `/Shared/Emulation/pm/games/` at startup
-  (`pd->file->listfiles`).
-- If 0 found: load the bundled `boot.min` fallback so the app still
-  does *something*, and show a small "place your ROMs in
-  `/Shared/Emulation/pm/games/` and restart" hint somewhere
-  unobtrusive (corner overlay or About screen) with the actual device
-  path printed.
-- If 1 found: load it directly.
-- If 2+ found: simple list-picker UI before booting the emulator.
+### 1c. ROM picker — done (rough)
+Implemented in `PokeMini_Playdate.c`:
+- mkdir cascade for `/Shared/Emulation/pm/games/` on boot.
+- `*.min` enumeration via `pd->file->listfiles`.
+- 0 ROMs: boot FreeBIOS only (its own no-cart splash).
+- 1 ROM: auto-load it (no point showing a one-item picker).
+- 2+ ROMs: simple D-pad + A list picker.
+- System menu adds a "ROM Picker" item that returns to the picker
+  mid-game without quitting the app.
+
+Still rough; remaining work is mostly polish:
+- Empty-state hint with the device path printed (currently silent — see
+  §3b).
+- The picker text uses a single system font and basic black/white
+  rows; no scroll indicator, no thumbnails. Fine for testing.
+- Returning to the picker doesn't reset `MinxAudio` state, so a tone
+  may briefly persist if the previous ROM was emitting one. Pause/
+  mute on transition is queued in §2b/§3c.
 
 ### 1d. License + attribution
 PokéMini is GPLv3. The repo has the upstream license but the Playdate
@@ -125,7 +130,7 @@ Use Playdate's system menu API (`pd->system->addMenuItem`,
   for the tradeoff
 - **C button**: which input does C map to (see 2a)
 - **Save state** / **Load state** slots (see 2e)
-- **Quit to ROM picker** (after 1c lands)
+- ~~**Quit to ROM picker**~~ — wired up (see 1c).
 
 ### 2e. Save states (in addition to EEPROM)
 PokéMini already has full save/load state code (`POKELOADSS_*` /
