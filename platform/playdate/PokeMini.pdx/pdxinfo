@@ -1,9 +1,0 @@
-name=PokeMini
-author=Pomettini & JustBurn
-description=A Pokemon Mini emulator
-bundleID=com.pomettini.pokemini
-version=0.1.0
-buildNumber=1
-imagePath=
-pdxversion=30005
-buildtime=831596498
