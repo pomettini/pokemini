@@ -508,11 +508,156 @@ rather than diagnostics, the side effect is valuable.
   Easy regression check: comment out the keepalive block, sideload,
   see if perf stays at 24 fps. If yes, the SDK fixed it and the
   block can be removed.
-- If full ITCM placement (the next perf lever in this notes file)
-  is implemented, retest this. ITCM might bypass whatever firmware
-  state matters here.
 - If anyone figures out the actual mechanism, document it — knowing
   the *why* would let us shrink the keepalive block to a minimum.
+
+## ITCM correction (2026-05-09)
+
+A previous note here claimed ITCM placement was the next big lever
+toward native PM speed on heavy ROMs. **It isn't.**
+
+The Playdate firmware does not expose the M7's actual ITCM hardware
+to user code. The community calls "ITCM" what is in practice
+elaborate `.text` placement: linker scripts that name sections
+`.itcm.foo`, place them at specific addresses inside the regular
+`.text` output (no `AT()`/separate LMA), and rely on ALIGN(0x1000)
+offsets to manage branch-predictor aliasing on the M7. Confirmed by
+inspecting [CrankBoyHQ/crankboy-app's link_map.ld](https://raw.githubusercontent.com/CrankBoyHQ/crankboy-app/development/link_map.ld) —
+their `.itcm.dmg.*` sections live in regular `.text`, with no
+runtime memcpy to a TCM region. Their own comment reads
+`/* code to copy to TCM, seemingly runs faster */` — note the
+"seemingly," and the absence of any actual copy.
+
+So "ITCM" in the Playdate community is shorthand for "even more
+aggressive linker tuning than what we already do." The technique
+*does* yield small wins (we got ~5% from one alignment knob, see
+below), but it cannot close the heavy-ROM gap to native speed.
+The realistic path to native speed on the M7 is a computed-goto
+rewrite of `MinxCPU_Exec` — see "Computed-goto rewrite" planning
+below.
+
+## Linker-tuning pass: 4 KB alignment of MinxCPU_Exec (2026-05-09)
+
+After section consolidation got heavy Japanese Togepi to 81% real
+PM speed, tried to push further with CrankBoy-style alignment
+tuning. The observation: the M7 branch predictor table is keyed on
+bits modulo 0x1000, so functions whose entry points hit the same
+mod-0x1000 offset can alias each other in the predictor.
+
+### Mechanism
+
+- New `POKEMINI_HOT_EXEC` section attribute (`.text.hot.exec`),
+  applied to `MinxCPU_Exec` only.
+- `link_map.ld` places `.text.hot.exec` at `ALIGN(0x1000)` (4 KB
+  boundary), then `.text.hot*` (the rest of the hot pack) right
+  after with cache-line alignment.
+- Net effect: `MinxCPU_Exec` is forced to mod-0x1000 offset `0x000`
+  instead of the accidental `0x220` it had before.
+
+### Result
+
+| | Section consolidation only | + 4 KB alignment of MinxCPU_Exec |
+| --- | --- | --- |
+| Heavy Togepi steady display fps | ~24 | ~25 |
+| Heavy Togepi PM frames/sec | ~58 | ~60-62 |
+| ms per PM frame | 17.1 | 16.2 |
+| % real PM speed | 81% | **86%** |
+
+**~5 percentage points** on top of section consolidation, in line
+with CrankBoy's reported gain magnitudes. Best windows now hit
+93% real PM speed (vs. previously capped at ~83%), e.g.:
+
+```
+perf: 29 calls (28.2 fps), 69 PM frames in 1.03s | emu=937ms
+```
+
+Worst-case stalls (~10 fps, ~25 PM frames) are unchanged — those
+are scene-driven busy-waits in the game, not addressable from
+layout.
+
+### Why this is the ceiling for layout tricks
+
+We already have:
+- Section consolidation (`.text.hot` first in `.text`)
+- 4 KB alignment of the dispatcher
+- `-Os -falign-loops=32` (no LTO, dropped for sections)
+- Custom `link_map.ld` overriding the SDK's
+
+CrankBoy goes further with multiple `ALIGN(0x1000); += <constant>`
+incantations, sub-section partitioning of hot helpers, and dozens
+of empirically-tuned offset constants. We could chase those, but
+their reported gain is in the same 1-3% range as what we'd add.
+**Diminishing returns.** The remaining 14% gap to native is not
+addressable through layout.
+
+## Computed-goto rewrite (next perf lever)
+
+The dispatcher overhead itself is the next target. `MinxCPU_Exec`
+is structured as a 256-case `switch` plus per-handler functions.
+Every opcode dispatch involves: fetch IR, branch to switch top,
+indirect branch through jump table to case body, run body, return
+to outer loop, branch back to top. The per-instruction overhead
+beyond the actual opcode work is meaningful — typically 5-10
+M7 cycles per dispatch on a loop like this.
+
+The computed-goto pattern (a GCC extension: labels-as-values, see
+`&&label`) replaces switch dispatch with direct threaded code:
+
+```c
+static const void *const handlers[256] = {
+    &&op_00, &&op_01, /* ... */ &&op_ff,
+};
+goto *handlers[fetch_opcode()];
+
+op_00: /* opcode 00 body */
+       goto *handlers[fetch_opcode()];
+op_01: /* opcode 01 body */
+       goto *handlers[fetch_opcode()];
+/* ... */
+```
+
+Each opcode handler ends with its own `goto *handlers[...]` rather
+than returning to a common switch top. Branches don't converge,
+which lets the M7 predictor keep per-opcode state. Saves the
+return + re-dispatch cycles per opcode.
+
+### Plausible gain
+
+Hard to predict precisely. Reported gains in the literature for
+similar interpreter rewrites range from 10-30% on dispatch-bound
+cores. M7 is dispatch-bound here (CPU phase = 62% of `emu` time),
+so a 20% reduction in dispatch overhead would shave ~7% off the
+total per-PM-frame cost. That'd put us in the ~91% real-PM-speed
+range — close to native, possibly all the way there with the
+current layout already in place.
+
+### Risks / cost
+
+- **GCC-only:** `&&label` and `goto *p` are GCC extensions. Other
+  PokeMini ports (MinGW, Visual Studio sim, etc.) wouldn't compile.
+  Solution: provide both implementations behind a `#if defined(__GNUC__)`
+  guard, falling back to the existing switch on non-GCC.
+- **Substantial code churn:** `MinxCPU_XX.c` (256-case switch) is
+  the canonical place for this, but `MinxCPU_CE.c`, `MinxCPU_CF.c`,
+  `MinxCPU_SP.c` (prefix-byte dispatchers) are smaller switches
+  that would also benefit.
+- **Maintenance:** the label table needs to stay in lockstep with
+  the opcode set. Adding/removing opcodes means updating both the
+  handler bodies and the table.
+- **Upstream PR:** if it works, worth proposing back to JustBurn's
+  PokeMini for inclusion under a `#ifdef PERFORMANCE_GOTO` flag.
+
+### Approach when starting
+
+1. Write the alternative `MinxCPU_Exec` body in `MinxCPU_XX.c`
+   guarded by `#if defined(__GNUC__) && defined(PERFORMANCE)`.
+2. Keep the existing switch as the fallback path.
+3. Test: build, sideload, measure with the keepalive block.
+4. If gain is real: do `MinxCPU_ExecCE`, `_ExecCF`, `_ExecSPCE`,
+   `_ExecSPCF` similarly.
+5. If gain is small/negative: revert; computed-goto isn't a fit
+   here for whatever reason (maybe `MinxCPU_OnRead` memory latency
+   dominates instead of dispatch overhead).
 
 ## Performance levers (quick reference)
 
