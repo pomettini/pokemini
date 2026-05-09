@@ -69,7 +69,7 @@ static char *PD_KeysNames[] = {
 	"Down",   //  3
 	"Left",   //  4
 	"Right",  //  5
-	"Crank",  //  6
+	"Accel",  //  6 — accelerometer-driven shake
 };
 
 // PM key order: Menu, A, B, C, Up, Down, Left, Right, Power, Shake
@@ -83,7 +83,7 @@ static int PD_KeysMapping[] = {
 	 4,  // Left  -> D-pad Left
 	 5,  // Right -> D-pad Right
 	-1,  // Power -> unmapped
-	 6,  // Shake -> Crank
+	 6,  // Shake -> accelerometer (squared-magnitude threshold)
 };
 
 // Playdate audio callback: fill the left channel with generated PM audio samples.
@@ -145,7 +145,8 @@ static int load_rom(const char *path)
 
 // Poll all Playdate buttons and forward press/release events to the joystick
 // subsystem, which maps them to Pokemon Mini keys via PD_KeysMapping.
-// A significant crank movement is treated as the PM "Shake" input.
+// A vigorous device shake (accelerometer magnitude past a threshold) emits a
+// PM "Shake" pulse — a more natural fit than the crank ever was.
 static void handle_input(void)
 {
 	PDButtons cur, pushed, released;
@@ -164,11 +165,20 @@ static void handle_input(void)
 	if (pushed   & kButtonRight) JoystickButtonsEvent(5, 1);
 	if (released & kButtonRight) JoystickButtonsEvent(5, 0);
 
-	// Treat a quarter-turn or more of crank movement as a "Shake" pulse
-	float delta = pd->system->getCrankChange();
-	if (delta > 45.0f || delta < -45.0f) {
+	// Accelerometer returns x/y/z in g-units. At rest the magnitude is ~1.0
+	// (gravity); a confident shake pushes it well past 1.0. Compare squared
+	// magnitudes to avoid the sqrt — threshold tuned by feel on hardware.
+	// Cooldown prevents one shake gesture from firing multiple PM events.
+	static int shake_cooldown = 0;
+	if (shake_cooldown > 0) shake_cooldown--;
+
+	float ax, ay, az;
+	pd->system->getAccelerometer(&ax, &ay, &az);
+	float mag2 = ax * ax + ay * ay + az * az;
+	if (mag2 > 2.5f && shake_cooldown == 0) {
 		JoystickButtonsEvent(6, 1);
 		JoystickButtonsEvent(6, 0);
+		shake_cooldown = 6;  // ~200 ms at 30 fps
 	}
 }
 
@@ -513,6 +523,11 @@ int eventHandler(PlaydateAPI *playdate, PDSystemEvent event, uint32_t arg)
 
 		// 30 fps display rate; we emulate 2 PM frames per call
 		pd->display->setRefreshRate(30);
+
+		// Accelerometer powers the PM "Shake" input. Off by default to save
+		// battery; enabling adds a small idle draw but it's the only way
+		// getAccelerometer returns useful data.
+		pd->system->setPeripheralsEnabled(kAccelerometer);
 
 		init_expand_lut();
 

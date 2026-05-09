@@ -116,14 +116,18 @@ keeps playing. Should pause cleanly:
   emulating and silence the audio source while paused.
 - Same for `kEventLowPower` (charger unplugged near zero battery).
 
-### 2c. Accelerometer-based shake
-Currently crank rotation = Shake. Playdate has a real 3-axis
-accelerometer (`pd->system->getAccelerometer`) that's a more natural fit
-for the PM Shake input. Detection: rolling magnitude of `dx,dy,dz`
-above a threshold = shake event. Cost: enable accelerometer
-(`pd->system->setPeripheralsEnabled`), small battery hit.
+### 2c. Accelerometer-based shake — done
+Shake is now driven by `pd->system->getAccelerometer`: squared-
+magnitude past 2.5 g² (rest is ~1.0 g² thanks to gravity) emits a PM
+Shake pulse, with a 6-frame cooldown so one gesture doesn't fire
+multiple events. The accelerometer peripheral is enabled in
+`kEventInit` via `setPeripheralsEnabled(kAccelerometer)`.
 
-This frees the crank for the C button per 2a.
+The crank is now unused — frees it up for the C button per 2a.
+
+Threshold tuning is by feel; if it triggers too easily on regular
+movement, raise `mag2 > 2.5f` in `handle_input`. If it needs a
+violent shake to register, lower it.
 
 ### 2d. In-app settings menu
 Use Playdate's system menu API (`pd->system->addMenuItem`,
@@ -197,15 +201,18 @@ be removed in a follow-up cleanup or kept for ad-hoc dev testing.
 Follow-up: confirm `.gitignore` ignores `*.min` so casual local copies
 of copyrighted ROMs don't get committed.
 
-### 4b. README for the platform
-`platform/playdate/` has `NOTES.md` (development notes) and `ROADMAP.md`
-(this file) but no end-user `README.md`. Needs to cover:
-- What this is
-- How to install (sideload `.pdx`)
-- How to add ROMs (path, file format)
-- Controls
-- Known issues
-- Build instructions for developers
+### 4b. README for the platform — done
+`platform/playdate/README.md` covers:
+- What this is, what works, ROMs-not-included disclaimer.
+- Install (sideload via play.date/account or Mirror).
+- Adding ROMs (`/Shared/Emulation/pm/games/`).
+- Controls table.
+- Known limitations and a pointer to this roadmap for the full list.
+- Build instructions for developers (links NOTES.md).
+- Credits + GPLv3 reference.
+- An AI disclosure paragraph at the end.
+
+Same file is meant to double as the itch.io page description.
 
 ### 4c. CI for the device build
 The `build-device/` cmake config is fragile (PLAYDATE_SDK_PATH must be
@@ -235,17 +242,19 @@ pointer. Could remove the SetVideo call entirely and shave a few KB.
 ## Suggested order
 
 A reasonable shipping path:
-1. ~~**1a, 4a**~~ — copyrighted ROMs removed, `boot.min` retained as fallback. ✅
-2. **1d, 4b** — LICENSE + README pass (an afternoon)
-3. **1c, 3b** — `mkdir /Shared/Emulation/pm/games/`, list/pick ROMs,
-   fall back to `boot.min` if empty (half day)
-4. **1b** — EEPROM persistence (a few hours, biggest player-facing win)
-5. **2b, 3c** — pause/resume handling (an hour each)
-6. **3a** — per-ROM data isolation (a few hours)
-7. **2a, 2c, 2d** — controls (C button), accelerometer shake, settings
-   menu with the above wired in (a day)
-8. **2e, 1e** — save states + card art once graphics are ready
+1. ~~**1a, 4a**~~ — copyrighted ROMs removed; `boot.min` retired in
+   favor of FreeBIOS. ✅
+2. ~~**1c**~~ — ROM picker scanning `/Shared/Emulation/pm/games/`. ✅
+3. ~~**1d (LICENSE), 4b**~~ — LICENSE bundled, README done. ✅
+4. ~~**2c**~~ — accelerometer-based shake (crank now free). ✅
+5. **1b** — EEPROM persistence (a few hours, biggest player-facing win)
+6. **2b, 3c** — pause/resume handling (an hour each)
+7. **3a, 3b** — per-ROM data isolation + empty-state hint (half day)
+8. **2a, 2d** — C button mapping (likely on the now-free crank) +
+   settings menu wiring everything together (a day)
+9. **2e, 1e** — save states UI + card art when graphics are ready
    (half day)
-9. **3d, 3e, 3f** — polish pass (as time allows)
+10. **1d (Credits)**, **3d, 3e, 3f** — in-app credits + polish pass
+    (as time allows)
 
-That's roughly 2-3 days of focused work to a v1.0 release from here.
+That's roughly 1-2 days of focused work to a v1.0 release from here.
