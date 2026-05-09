@@ -149,26 +149,50 @@ int MinxCPU_SaveState(FILE *fi);	// Save State
 int MinxCPU_Exec(void);			// Execute 1 CPU instruction
 int MinxCPU_CallIRQ(uint8_t IRQ);	// Call an IRQ
 
+#ifdef PD_OPCODE_DIAG
+enum {
+	MINXCPU_OPDIAG_XX,
+	MINXCPU_OPDIAG_CE,
+	MINXCPU_OPDIAG_CF,
+	MINXCPU_OPDIAG_SPCE,
+	MINXCPU_OPDIAG_SPCF,
+	MINXCPU_OPDIAG_TABLES
+};
+
+extern uint32_t MinxCPU_OpcodeDiag[MINXCPU_OPDIAG_TABLES][256];
+void MinxCPU_OpcodeDiagReset(void);
+#endif
+
+#if defined(POKEMINI_CPU_FASTMEM) && defined(PERFORMANCE)
+uint8_t MinxCPU_FastRead(int cpu, uint32_t addr);
+void MinxCPU_FastWrite(int cpu, uint32_t addr, uint8_t data);
+#define MINXCPU_READ(cpu, addr) MinxCPU_FastRead(cpu, addr)
+#define MINXCPU_WRITE(cpu, addr, data) MinxCPU_FastWrite(cpu, addr, data)
+#else
+#define MINXCPU_READ(cpu, addr) MinxCPU_OnRead(cpu, addr)
+#define MINXCPU_WRITE(cpu, addr, data) MinxCPU_OnWrite(cpu, addr, data)
+#endif
+
 // Helpers
 static inline uint16_t ReadMem16(uint32_t addr)
 {
-	return MinxCPU_OnRead(1, addr) + (MinxCPU_OnRead(1, addr+1) << 8);
+	return MINXCPU_READ(1, addr) + (MINXCPU_READ(1, addr+1) << 8);
 }
 
 static inline void WriteMem16(uint32_t addr, uint16_t data)
 {
-	MinxCPU_OnWrite(1, addr, (uint8_t)data);
-	MinxCPU_OnWrite(1, addr+1, data >> 8);
+	MINXCPU_WRITE(1, addr, (uint8_t)data);
+	MINXCPU_WRITE(1, addr+1, data >> 8);
 }
 
 static inline uint8_t Fetch8(void)
 {
 	if (MinxCPU.PC.W.L & 0x8000) {
 		// Banked area
-		MinxCPU.IR = MinxCPU_OnRead(1, (MinxCPU.PC.W.L++ & 0x7FFF) | (MinxCPU.PC.B.I << 15));
+		MinxCPU.IR = MINXCPU_READ(1, (MinxCPU.PC.W.L++ & 0x7FFF) | (MinxCPU.PC.B.I << 15));
 	} else {
 		// Unbanked area
-		MinxCPU.IR = MinxCPU_OnRead(1, MinxCPU.PC.W.L++);
+		MinxCPU.IR = MINXCPU_READ(1, MinxCPU.PC.W.L++);
 	}
 	return MinxCPU.IR;
 }
@@ -472,13 +496,13 @@ static inline uint16_t DEC16(uint16_t A)
 static inline void PUSH(uint8_t A)
 {
 	MinxCPU.SP.W.L--;
-	MinxCPU_OnWrite(1, MinxCPU.SP.D, A);
+	MINXCPU_WRITE(1, MinxCPU.SP.D, A);
 }
 
 static inline uint8_t POP(void)
 {
 	register uint8_t data;
-	data = MinxCPU_OnRead(1, MinxCPU.SP.D);
+	data = MINXCPU_READ(1, MinxCPU.SP.D);
 	MinxCPU.SP.W.L++;
 	return data;
 }

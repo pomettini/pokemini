@@ -19,10 +19,18 @@
 #include "PokeMini.h"
 #include "MinxCPU.h"
 
+#if defined(POKEMINI_CPU_FASTMEM) && defined(PERFORMANCE)
+#define MinxCPU_OnRead MinxCPU_FastRead
+#define MinxCPU_OnWrite MinxCPU_FastWrite
+#endif
+
 POKEMINI_HOT int MinxCPU_ExecSPCE(void)
 {
 	// Read IR
 	MinxCPU.IR = Fetch8();
+#ifdef PD_OPCODE_DIAG
+	MinxCPU_OpcodeDiag[MINXCPU_OPDIAG_SPCE][MinxCPU.IR]++;
+#endif
 
 	// Process instruction
 	switch(MinxCPU.IR) {
@@ -37,6 +45,9 @@ POKEMINI_HOT int MinxCPU_ExecSPCF(void)
 {
 	// Read IR
 	MinxCPU.IR = Fetch8();
+#ifdef PD_OPCODE_DIAG
+	MinxCPU_OpcodeDiag[MINXCPU_OPDIAG_SPCF][MinxCPU.IR]++;
+#endif
 
 	// Process instruction
 	switch(MinxCPU.IR) {

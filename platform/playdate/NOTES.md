@@ -1038,6 +1038,212 @@ a per-file `-O2` flag. The next meaningful path is source-level dispatch work
 (computed-goto or similarly locality-aware restructuring), not broader
 optimization flags on `MinxCPU_XX.c`.
 
+### Computed-goto dispatcher experiment — reverted (2026-05-09)
+
+Active experiment after `MinxCPU_XX.c -O2` regressed. `MinxCPU_XX.c` now uses
+shared opcode-body macros so the same bodies compile either as the original
+`switch` or as GCC labels-as-values. The Playdate build temporarily defined
+`POKEMINI_COMPUTED_GOTO`, enabling the computed-goto path:
+
+```c
+static const void *const handlers[256] = { &&op_00, ... };
+goto *handlers[MinxCPU.IR];
+```
+
+Scope: only the main `MinxCPU_Exec()` dispatcher. Prefix dispatchers
+(`MinxCPU_ExecCE`, `MinxCPU_ExecCF`, `MinxCPU_ExecSPCE`, `MinxCPU_ExecSPCF`)
+remain switch-based for this first A/B.
+
+Build result: `PokeMini.pdx` rebuilt successfully. Device `.text` is 113206
+bytes, about +512 bytes over the current keeper build (`Hardware.c -O2` +
+`MinxTimers.c -O3`, 112694 bytes).
+
+Result from the same Japanese Togepi / smooth LCD / first-three-levels route:
+average ~24.45 fps across 49 non-zero windows, with 30 windows >=25 fps, 9
+windows >=26 fps, and 2 windows >=27 fps. This is below the current keeper
+stack (`Hardware.c -O2` + `MinxTimers.c -O3`, ~25.9 fps), so
+`POKEMINI_COMPUTED_GOTO` was removed from the Playdate build. The source-level
+fallback remains available if we want to revisit threaded dispatch later, but
+the active build is back on the plain switch dispatcher.
+
+### Opcode frequency diagnostic build (2026-05-09)
+
+Diagnostic used after broad dispatcher-shape experiments stopped helping.
+When `PD_OPCODE_DIAG` is enabled, the Playdate build counts executed CPU
+opcodes in five tables:
+
+- `xx`: top-level opcodes from `MinxCPU_Exec()`
+- `ce`: sub-opcodes from `MinxCPU_ExecCE()`
+- `cf`: sub-opcodes from `MinxCPU_ExecCF()`
+- `spce`: nested special `CE` sub-opcodes
+- `spcf`: nested special `CF` sub-opcodes
+
+The Playdate update loop logs compact top-8 windows every 150 display updates:
+
+```text
+opdiag: window=150 updates
+opdiag: xx total=... top=3E:... CE:... ...
+opdiag: ce total=... top=...
+```
+
+This is intentionally game-agnostic. Run the same route on Togepi first for
+continuity, but also sample other representative games before committing
+opcode-specific optimizations. The diagnostic build adds per-instruction
+counter overhead, so use it for hot-opcode discovery only, not for fps
+comparison.
+
+Togepi JP sample through roughly level 6:
+
+- 16 diagnostic windows, ~20.1M top-level opcodes counted.
+- `xx:E7` (`JNZ #ss`) was ~7.14M calls, ~35.5% of top-level dispatches.
+- `xx:95` (`TST [HL], #nn`) was ~7.09M calls, ~35.2% of top-level
+  dispatches.
+- `xx:CE` / `ce:*` was ~1.20M calls, ~6.0%.
+- `xx:CF` / `cf:*` was ~0.55M calls, ~2.7%.
+- Top `CE` sub-opcodes: `28` (`OR A, [X+#ss]`), `D0` (`MOV A, [#nnnn]`),
+  `40` (`MOV A, [X+#ss]`), `D4` (`MOV [#nnnn], A`), `C5` (`MOV I, #nn`).
+- Top `CF` sub-opcodes: `B1` (`PUSH B`) and `B5` (`POP B`) dominated,
+  followed by `01` (`ADD BA, HL`) and `00` (`ADD BA, BA`).
+
+Interpretation: Togepi is spending most of the CPU dispatch stream in tight
+`TST [HL], #nn` / `JNZ #ss` polling or bit-test loops. This is useful, but do
+not optimize only for this shape yet. Before committing a source-level opcode
+fast path, sample at least one puzzle/menu-heavy game and one action/minigame
+ROM to see whether `95/E7` remains dominant or whether memory movement /
+prefix opcodes take over.
+
+Pokemon Party Mini Europe sample:
+
+- 52 diagnostic windows, ~8.23M top-level opcodes counted.
+- Average top-level dispatches per 150-update window: ~158k. This is much
+  lower than Togepi's ~1.26M/window, matching the much smoother 30 fps feel.
+- `xx:CE` / `ce:*` was ~1.42M calls, ~17.3% of top-level dispatches.
+- `xx:CF` / `cf:*` was ~0.73M calls, ~8.8%.
+- `xx:E6` (`JZ #ss`) was ~345k calls, ~4.2%; `xx:E7` (`JNZ #ss`) was only
+  ~230k calls, ~2.8%.
+- The Togepi-dominant `xx:95` (`TST [HL], #nn`) did not appear in the top
+  window summaries, so it is not a universal hot spot.
+- Top `CE` sub-opcodes: `D0` (`MOV A, [#nnnn]`), `D4` (`MOV [#nnnn], A`),
+  `80` (`SAL A`), `C4` (`MOV U, #nn`), `C5` (`MOV I, #nn`), `C6`
+  (`MOV XI, #nn`).
+- Top `CF` sub-opcodes: `20` (`ADD HL, BA`), `B0`/`B4` (`PUSH A`/`POP A`),
+  `B9`/`BD` (`PUSHAX`/`POPAX`), `B2`/`B6` (`PUSH L`/`POP L`).
+
+Interpretation: Party Mini is not branch/test bound like Togepi. It is much
+lighter overall and spends a larger share in prefix dispatch, absolute memory
+loads/stores, register-bank setup (`MOV U/I/XI, #nn`), ALU shifts, and stack
+traffic. A Togepi-specific `95/E7` fused path is risky as a general
+optimization. The safer cross-game direction looked like reducing prefix
+dispatch/memory access overhead or improving the hot `MinxCPU_OnRead` /
+`MinxCPU_OnWrite` paths, then testing on both games.
+
+Pokemon Pinball Mini USA/Europe sample:
+
+- 12 diagnostic windows, ~14.5M top-level opcodes counted.
+- Average top-level dispatches per 150-update window: ~1.21M, much closer to
+  Togepi than Party Mini.
+- `xx:E7` (`JNZ #ss`) was ~4.68M calls, ~32.2%.
+- `xx:95` (`TST [HL], #nn`) was ~4.60M calls, ~31.7%.
+- `xx:CE` / `ce:*` was ~1.19M calls, ~8.2%.
+- `xx:CF` / `cf:*` was ~0.50M calls, ~3.4%.
+- Top `CE` sub-opcodes: `D0` (`MOV A, [#nnnn]`), `28`
+  (`OR A, [X+#ss]`), `D4` (`MOV [#nnnn], A`), `40`
+  (`MOV A, [X+#ss]`), `93` (`ROLC H`), `D8` (`MUL L, A`), `51`
+  (`MOV L, [Y+#ss]`).
+- Top `CF` sub-opcodes: `B1`/`B5` (`PUSH B`/`POP B`), `01`
+  (`ADD BA, HL`), `20` (`ADD HL, BA`), `60` (`ADC BA, #nnnn`), `42`
+  (`ADD Y, BA`).
+
+Interpretation: Pinball confirms that `TST [HL], #nn` / `JNZ #ss` is not just
+a Togepi pattern; at least two heavier games spend most top-level dispatches
+there. However, the later Pinball windows also shift heavily into `CE`/`CF`
+prefix traffic, absolute/indexed memory accesses, stack traffic, and 16-bit
+math. Current best optimization direction: first try a broadly useful CPU
+memory-access fast path, then compare Togepi + Pinball + Party Mini. A fused
+`95/E7` loop path may be worth a later A/B only if the general memory work is
+insufficient.
+
+Pokemon Shock Tetris Japan sample:
+
+- 17 diagnostic windows, ~18.0M top-level opcodes counted.
+- Average top-level dispatches per 150-update window: ~1.06M, lighter than
+  Togepi/Pinball but still a heavy game compared with Party Mini.
+- `xx:E6` (`JZ #ss`) was ~5.01M calls, ~27.8%.
+- `xx:35` (`CMP A, [#nnnn]`) was ~4.58M calls, ~25.5%.
+- `xx:CE` / `ce:*` was ~3.61M calls, ~20.1%.
+- `xx:CF` / `cf:*` was ~0.31M calls, ~1.7%.
+- `xx:E7` (`JNZ #ss`) was only ~0.13%; this is not the Togepi/Pinball
+  `TST [HL], #nn` / `JNZ #ss` shape.
+- Top `CE` sub-opcodes were overwhelmingly absolute-memory operations:
+  `D0` (`MOV A, [#nnnn]`) at ~44.1% of `CE`, and `D4`
+  (`MOV [#nnnn], A`) at ~32.5%, followed by `80` (`SAL A`), `90`
+  (`ROLC A`), and `BC` (`CMP B, #nn`).
+- Top `CF` sub-opcodes: `B4`/`B0` (`POP A`/`PUSH A`) dominated, followed by
+  `40`/`41` (`ADD X, BA` / `ADD X, HL`) and `B9`/`BD`
+  (`PUSHAX`/`POPAX`).
+
+Interpretation: Shock Tetris rules out optimizing only for `95/E7`.
+The common cross-game theme is memory-heavy compare/test/load/store work plus
+flag-setting branches. Heavy games can be `TST [HL]` + `JNZ`, `CMP A,[#nnnn]`
++ `JZ`, or prefix-heavy absolute/indexed loads and stores. This strengthened
+the case for a general CPU memory-access fast path before any fused opcode
+special case.
+
+### CPU fast memory access experiment - reverted (2026-05-10)
+
+Test after the opcode-frequency diagnostic showed that the heavy games are not
+all dominated by the same opcode pair. Instead of fusing one
+Togepi/Pinball-style loop, the Playdate build temporarily defined
+`POKEMINI_CPU_FASTMEM` with `PD_OPCODE_DIAG` disabled.
+
+Implementation:
+
+- `MinxCPU_FastRead()` and `MinxCPU_FastWrite()` live in `source/Hardware.c`
+  and keep the same coarse memory behavior as the existing performance path:
+  BIOS below `0x1000`, RAM/framebuffer at `0x1000..0x1FFF`, I/O at
+  `0x2000..0x20FF`, ROM at `0x2100+`.
+- `source/MinxCPU.h` routes `Fetch8()`, `ReadMem16()`, `WriteMem16()`,
+  `PUSH()`, and `POP()` through `MINXCPU_READ` / `MINXCPU_WRITE`.
+- The CPU dispatch translation units locally alias `MinxCPU_OnRead` /
+  `MinxCPU_OnWrite` to the fast helpers when `POKEMINI_CPU_FASTMEM` is
+  defined, so ordinary opcode memory operands get the same fast path without
+  rewriting individual opcodes.
+
+First implementation note: an inline-header version made the device binary too
+large (`.text` around 137 KB), which is bad for the Playdate M7 Rev A I-cache.
+The current function-helper version keeps code size close to the keeper stack:
+
+```text
+   text    data     bss     dec     hex filename
+ 112886    3712   19516  136114   213b2 build-device/PokeMini.elf
+```
+
+That was only +192 bytes over the previous keeper build (`112694` bytes for
+`MinxTimers.c -O3` + `Hardware.c -O2`), but the device result on Togepi JP was
+a clear regression: most steady windows landed around 20-23 fps, with no 25+
+fps steady region. Representative sample:
+
+```text
+perf: total=120 dt=1363ms (rate=22.0fps)
+perf: total=300 dt=1733ms (rate=17.3fps)
+perf: total=600 dt=1339ms (rate=22.4fps)
+perf: total=900 dt=1743ms (rate=17.2fps)
+perf: total=1200 dt=1490ms (rate=20.1fps)
+perf: total=1500 dt=1323ms (rate=22.7fps)
+```
+
+Conclusion: do not keep this in the active build. The extra function-call hop
+for every memory operand appears to cost more than the simpler branch tree
+saves. `POKEMINI_CPU_FASTMEM` was removed from the Playdate compile
+definitions, leaving the helper code dormant behind its guard in case we want
+to revisit a narrower, opcode-specific direct memory path later.
+
+Post-revert sanity check on Togepi JP returned to the keeper range:
+~25.9 fps average across 52 non-zero 30-update windows, with 38 windows
+>=25 fps, 36 windows >=26 fps, and 27 windows >=27 fps. After the boot/loading
+outliers, the run spends long stretches around 27.2-27.8 fps again, confirming
+the active build is back to the pre-fastmem performance profile.
+
 ## LCD shading / dither suppression (2026-05-03)
 
 PM games fake gray by toggling pixels every native frame (72 Hz). Real

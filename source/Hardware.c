@@ -243,6 +243,23 @@ POKEMINI_HOT uint8_t MinxCPU_OnRead(int cpu, uint32_t addr)
 	return 0xFF;
 }
 
+#if defined(POKEMINI_CPU_FASTMEM) && defined(PERFORMANCE)
+POKEMINI_HOT uint8_t MinxCPU_FastRead(int cpu, uint32_t addr)
+{
+	(void)cpu;
+	if (addr >= 0x2100) {
+		if (PM_ROM) return PM_ROM[addr & PM_ROM_Mask];
+	} else if (addr >= 0x2000) {
+		return MinxCPU_OnRead(cpu, addr);
+	} else if (addr >= 0x1000) {
+		return PM_RAM[addr - 0x1000];
+	} else {
+		return PM_BIOS[addr];
+	}
+	return 0xFF;
+}
+#endif
+
 POKEMINI_HOT void MinxCPU_OnWrite(int cpu, uint32_t addr, uint8_t data)
 {
 #ifdef PERFORMANCE
@@ -338,6 +355,26 @@ POKEMINI_HOT void MinxCPU_OnWrite(int cpu, uint32_t addr, uint8_t data)
 		return;
 	}
 }
+
+#if defined(POKEMINI_CPU_FASTMEM) && defined(PERFORMANCE)
+POKEMINI_HOT void MinxCPU_FastWrite(int cpu, uint32_t addr, uint8_t data)
+{
+	(void)cpu;
+	if (addr >= 0x2100) {
+		return;
+	} else if (addr >= 0x2000) {
+		MinxCPU_OnWrite(cpu, addr, data);
+		return;
+	} else if (addr >= 0x1300) {
+		PM_RAM[addr - 0x1000] = data;
+		return;
+	} else if (addr >= 0x1000) {
+		PM_RAM[addr - 0x1000] = data;
+		if (PRCColorMap) MinxColorPRC_WriteFramebuffer((uint16_t)(addr - 0x1000), data);
+		return;
+	}
+}
+#endif
 
 void MinxCPU_OnException(int type, uint32_t ir)
 {

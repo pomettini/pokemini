@@ -24,6 +24,7 @@
 
 #include "PokeMini.h"
 #include "Hardware.h"
+#include "MinxCPU.h"
 #include "Joystick.h"
 #include "Video_x1.h"
 #include "UI.h"
@@ -71,6 +72,64 @@ static void pdperf_log_and_reset(void)
 	pdperf_update_us = 0;
 	pdperf_updates = 0;
 	pdperf_pm_frames = 0;
+}
+#endif
+
+#ifdef PD_OPCODE_DIAG
+#define PD_OPDIAG_TOP_N 8
+#define PD_OPDIAG_LOG_UPDATES 150
+
+static const char *const pdopdiag_names[MINXCPU_OPDIAG_TABLES] = {
+	"xx", "ce", "cf", "spce", "spcf"
+};
+
+static void pdopdiag_log_table(int table)
+{
+	uint32_t total = 0;
+	uint32_t top_counts[PD_OPDIAG_TOP_N] = {0};
+	uint8_t top_opcodes[PD_OPDIAG_TOP_N] = {0};
+
+	for (int opcode = 0; opcode < 256; opcode++) {
+		uint32_t count = MinxCPU_OpcodeDiag[table][opcode];
+		total += count;
+		if (count == 0 || count <= top_counts[PD_OPDIAG_TOP_N - 1])
+			continue;
+
+		for (int slot = 0; slot < PD_OPDIAG_TOP_N; slot++) {
+			if (count > top_counts[slot]) {
+				for (int move = PD_OPDIAG_TOP_N - 1; move > slot; move--) {
+					top_counts[move] = top_counts[move - 1];
+					top_opcodes[move] = top_opcodes[move - 1];
+				}
+				top_counts[slot] = count;
+				top_opcodes[slot] = (uint8_t)opcode;
+				break;
+			}
+		}
+	}
+
+	if (total == 0)
+		return;
+
+	pd->system->logToConsole(
+		"opdiag: %s total=%lu top=%02X:%lu %02X:%lu %02X:%lu %02X:%lu %02X:%lu %02X:%lu %02X:%lu %02X:%lu",
+		pdopdiag_names[table], (unsigned long)total,
+		top_opcodes[0], (unsigned long)top_counts[0],
+		top_opcodes[1], (unsigned long)top_counts[1],
+		top_opcodes[2], (unsigned long)top_counts[2],
+		top_opcodes[3], (unsigned long)top_counts[3],
+		top_opcodes[4], (unsigned long)top_counts[4],
+		top_opcodes[5], (unsigned long)top_counts[5],
+		top_opcodes[6], (unsigned long)top_counts[6],
+		top_opcodes[7], (unsigned long)top_counts[7]);
+}
+
+static void pdopdiag_log_and_reset(unsigned int updates)
+{
+	pd->system->logToConsole("opdiag: window=%u updates", updates);
+	for (int table = 0; table < MINXCPU_OPDIAG_TABLES; table++)
+		pdopdiag_log_table(table);
+	MinxCPU_OpcodeDiagReset();
 }
 #endif
 
@@ -512,6 +571,9 @@ static void start_emulation_with_rom(const char *path)
 
 	PokeMini_Reset(0);
 	PokeMini_ApplyChanges();
+#ifdef PD_OPCODE_DIAG
+	MinxCPU_OpcodeDiagReset();
+#endif
 
 	// Repaint the whole framebuffer black so the border around the PM screen
 	// stays black without per-frame redraws (and overwrites the picker UI).
@@ -663,6 +725,13 @@ static int update(void *userdata)
 	pdperf_update_us += PDPerf_NowUs() - update_start;
 	pdperf_updates++;
 	if (pdperf_updates >= 30) pdperf_log_and_reset();
+#endif
+#ifdef PD_OPCODE_DIAG
+	static unsigned int opdiag_updates = 0;
+	if (++opdiag_updates >= PD_OPDIAG_LOG_UPDATES) {
+		pdopdiag_log_and_reset(opdiag_updates);
+		opdiag_updates = 0;
+	}
 #endif
 
 	return 1;
