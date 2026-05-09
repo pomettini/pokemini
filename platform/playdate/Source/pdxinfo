@@ -1,7 +1,7 @@
-name=PokeMini
+name=PokeMini Test
 author=Pomettini & JustBurn
-description=A Pokemon Mini emulator
-bundleID=com.pomettini.pokemini
+description=A Pokemon Mini emulator (linker-tuning experiment)
+bundleID=com.pomettini.pokemini.test
 version=0.1.0
-buildNumber=1
+buildNumber=3
 imagePath=

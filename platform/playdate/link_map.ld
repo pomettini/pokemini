@@ -17,7 +17,21 @@ SECTIONS
 {
 	.text :
 	{
-		/* Hot path: PM dispatcher + frequently-called helpers. */
+		/* Hot path: PM dispatcher + frequently-called helpers.
+		 *
+		 * .text.hot.exec (just MinxCPU_Exec) is forced to a 0x1000-byte
+		 * boundary first, to manage branch-predictor aliasing — the
+		 * Cortex-M7 predictor table is keyed on bits mod 0x1000, and
+		 * putting the single hottest function at a known offset within
+		 * its page makes it less likely to alias with other hot code.
+		 * Trick borrowed from CrankBoyHQ/crankboy-app's link_map.ld.
+		 *
+		 * Other .text.hot functions follow contiguously after a cache-
+		 * line boundary.
+		 */
+		. = ALIGN(0x1000);
+		*(.text.hot.exec)
+		. = ALIGN(32);
 		*(.text.hot*)
 		. = ALIGN(32);
 

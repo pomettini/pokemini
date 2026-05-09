@@ -21,7 +21,7 @@
 #include "PokeMini.h"
 #include "MinxCPU.h"
 
-POKEMINI_HOT int MinxCPU_Exec(void)
+POKEMINI_HOT_EXEC int MinxCPU_Exec(void)
 {
 	uint8_t I8A, I8B;
 	uint16_t I16;

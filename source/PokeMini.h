@@ -22,16 +22,25 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-// POKEMINI_HOT puts the tagged function into a custom ".text.hot" section.
-// Used on platforms with tight I-caches (Playdate Cortex-M7 Rev A: 4 KB)
-// so a custom linker script can place the dispatcher and its closest
-// callees contiguously at the lowest .text addresses, improving locality.
-// On platforms without TARGET_PLAYDATE this expands to nothing and the
-// usual section layout is used.
+// POKEMINI_HOT family: section attributes used by the Playdate port to
+// cluster hot functions and let the custom linker script place them at
+// specific addresses. Used to improve locality on the Cortex-M7's tiny
+// 4 KB I-cache (Rev A) and to manage branch-predictor aliasing on
+// 0x1000-byte boundaries (an M7 quirk; see CrankBoy's link_map.ld).
+//
+// - POKEMINI_HOT_EXEC: the single hottest function, MinxCPU_Exec. Placed
+//   at a 4 KB boundary to avoid branch-prediction conflicts with other
+//   hot code mod 0x1000.
+// - POKEMINI_HOT: everything else hot — MinxCPU_OnRead/OnWrite,
+//   MinxTimers_Sync, MinxPRC_Sync, the prefix dispatchers.
+//
+// On non-Playdate builds these expand to nothing.
 #ifdef TARGET_PLAYDATE
-#define POKEMINI_HOT __attribute__((section(".text.hot")))
+#define POKEMINI_HOT      __attribute__((section(".text.hot")))
+#define POKEMINI_HOT_EXEC __attribute__((section(".text.hot.exec")))
 #else
 #define POKEMINI_HOT
+#define POKEMINI_HOT_EXEC
 #endif
 
 // Common functions
