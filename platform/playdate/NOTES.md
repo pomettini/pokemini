@@ -955,6 +955,28 @@ Conclusion: keep `Hardware.c -O2` together with `MinxTimers.c -O3`. The next
 experiment should be chosen cautiously: the broad/hot files can regress from
 I-cache pressure, as `MinxPRC.c -O2` already showed.
 
+### Per-file optimization experiment: Hardware.c -O3 — reverted (2026-05-09)
+
+After `Hardware.c -O2` clearly improved Togepi JP, tried keeping the global
+device build at `-Os -falign-loops=32`, keeping `source/MinxTimers.c` at
+`-O3`, and changing only `source/Hardware.c` from `-O2` to `-O3`.
+
+Rationale: `Hardware.c` is small enough that the extra `-O3` code growth may be
+acceptable, unlike the larger PRC translation unit. This is a direct A/B
+against the current best stack.
+
+Result on Japanese Togepi, smooth LCD mode, first three levels:
+average display rate was ~25.4 fps over 53 measured windows, with 36
+windows at or above 25 fps, 32 at or above 26 fps, and 11 at or above 27 fps.
+This remained better than the timer-only stack, but regressed against
+`Hardware.c -O2` (~25.9 fps, 37 windows >=25 fps, 36 windows >=26 fps, 27
+windows >=27 fps). `.text` grew to 112758 bytes, only +64 bytes over
+`Hardware.c -O2`, so the regression is probably code-shape/scheduling rather
+than meaningful size pressure.
+
+Conclusion: reverted to `Hardware.c -O2`. Keep the current stack as
+`MinxTimers.c -O3` plus `Hardware.c -O2`.
+
 ## LCD shading / dither suppression (2026-05-03)
 
 PM games fake gray by toggling pixels every native frame (72 Hz). Real

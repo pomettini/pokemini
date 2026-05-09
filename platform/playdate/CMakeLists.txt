@@ -118,7 +118,7 @@ if (TOOLCHAIN STREQUAL "armgcc")
         PROPERTIES COMPILE_OPTIONS -O3)
 
     # Perf tweak: Hardware.c owns the per-frame CPU/timer/PRC sync loop.
-    # -O2 here clearly improved heavy Togepi JP while adding only ~256 bytes.
+    # -O2 beat both -Os and -O3 on heavy Togepi JP.
     set_source_files_properties(${POKEMINI_ROOT}/source/Hardware.c
         PROPERTIES COMPILE_OPTIONS -O2)
 
