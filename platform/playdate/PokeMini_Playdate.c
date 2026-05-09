@@ -509,42 +509,45 @@ static int update(void *userdata)
 	frame_accum -= pm_frames * 5;
 
 	// PERF KEEPALIVE (do NOT strip — see NOTES.md "Perf-keepalive
-	// anomaly" entry). Empirically, removing this block drops device
-	// throughput from ~24 fps to ~12 fps on heavy ROMs even though the
-	// elf is byte-identical in the hot path. Every subset we tried —
-	// only `getElapsedTime`, only `logToConsole`, only bookkeeping —
-	// falls short individually. The minimum load-bearing set we found
-	// is: 4× `getElapsedTime` per update bracketing the emu loop, the
-	// float-accumulator math, AND a `logToConsole` call once per
-	// second. The block also doubles as a perf log — useful, but the
-	// reason it can't be stripped is performance, not diagnostics.
-	static int   keepalive_calls       = 0;
-	static int   keepalive_pm_frames   = 0;
-	static float keepalive_emu_s       = 0.0f;
-	static float keepalive_window_t0   = -1.0f;
-	if (keepalive_window_t0 < 0.0f) keepalive_window_t0 = pd->system->getElapsedTime();
-	float keepalive_emu_t0 = pd->system->getElapsedTime();
+	// minimal recipe" entry). Empirically required to keep on-device
+	// throughput at ~25 fps; without it, perf drops to ~12 fps on heavy
+	// ROMs even though the elf is byte-identical in the hot path.
+	//
+	// Minimum recipe found by bisection:
+	//   - 4× pd->system->getElapsedTime() per update (returns are
+	//     discarded; the calls themselves are what matters)
+	//   - one format-rich pd->system->logToConsole() per second, with
+	//     %f-style float arg(s) so the firmware does FP format work
+	//
+	// Smaller variants (no syscalls / 1× syscall / log alone) cap at
+	// ~22 fps. Adding per-update FP math is negative (-2 fps overhead).
+	// We don't fully understand the firmware-side mechanism — see NOTES.
+	{
+		(void)pd->system->getElapsedTime();
+		(void)pd->system->getElapsedTime();
+		(void)pd->system->getElapsedTime();
+		(void)pd->system->getElapsedTime();
+
+		static int   keepalive_count = 0;
+		static int   keepalive_total = 0;
+		static unsigned int keepalive_t0 = 0;
+		keepalive_total++;
+		if (++keepalive_count >= 30) {
+			keepalive_count = 0;
+			unsigned int now = pd->system->getCurrentTimeMilliseconds();
+			unsigned int dt  = (keepalive_t0 == 0) ? 0 : now - keepalive_t0;
+			keepalive_t0 = now;
+			static float keepalive_f = 1.5f;
+			keepalive_f *= 1.0001f;
+			if (keepalive_f > 1.0e9f) keepalive_f = 1.5f;
+			pd->system->logToConsole(
+				"perf: total=%d dt=%ums (rate=%.1ffps) f=%.3f",
+				keepalive_total, dt,
+				dt > 0 ? 30000.0f / dt : 0.0f, keepalive_f);
+		}
+	}
 
 	for (int i = 0; i < pm_frames; i++) PokeMini_EmulateFrame();
-
-	float keepalive_emu_t1 = pd->system->getElapsedTime();
-	keepalive_emu_s     += keepalive_emu_t1 - keepalive_emu_t0;
-	keepalive_calls     += 1;
-	keepalive_pm_frames += pm_frames;
-	if (keepalive_emu_t1 - keepalive_window_t0 >= 1.0f) {
-		float window = keepalive_emu_t1 - keepalive_window_t0;
-		pd->system->logToConsole(
-			"perf: %d calls (%.1f fps), %d PM frames in %.2fs | emu=%.0fms",
-			keepalive_calls,
-			keepalive_calls / window,
-			keepalive_pm_frames,
-			window,
-			keepalive_emu_s * 1000.0f);
-		keepalive_calls = 0;
-		keepalive_pm_frames = 0;
-		keepalive_emu_s = 0.0f;
-		keepalive_window_t0 = keepalive_emu_t1;
-	}
 
 	handle_input();
 	render_screen();

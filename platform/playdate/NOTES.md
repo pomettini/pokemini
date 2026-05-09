@@ -506,10 +506,92 @@ rather than diagnostics, the side effect is valuable.
 
 - A future Playdate SDK or firmware update may change the behavior.
   Easy regression check: comment out the keepalive block, sideload,
-  see if perf stays at 24 fps. If yes, the SDK fixed it and the
+  see if perf stays at 25 fps. If yes, the SDK fixed it and the
   block can be removed.
 - If anyone figures out the actual mechanism, document it — knowing
   the *why* would let us shrink the keepalive block to a minimum.
+
+## Perf-keepalive minimal recipe (2026-05-09, after ka1-ka5 bisection)
+
+After shipping the original keepalive, did a controlled bisection to
+identify which parts were actually load-bearing. Each test was its
+own bundle (PokeMini KA1..KA5), Japanese Togepi first-three-levels,
+measured via `getCurrentTimeMilliseconds` deltas in the log.
+
+| Variant | Per-update | Per-second | fps |
+| --- | --- | --- | --- |
+| Baseline (clean) | nothing | nothing | ~12 |
+| 1× / 4× `getElapsedTime` only | syscall | nothing | ~12 |
+| `logToConsole("alive")` only | nothing | constant log | ~12 |
+| ka1 (FP math + log) | math | log w/ args | ~20 |
+| ka2 (log only) | nothing | log w/ args | ~22 |
+| ka3 (log 5×/sec) | nothing | log w/ args ×5 | ~22 |
+| ka4 (4× ge + log) | 4× ge | log w/ args | **~25** |
+| ka5 (1× ge + log) | 1× ge | log w/ args | ~22 |
+| Original keepalive (2× ge + math + log) | math + 2× ge | log w/ args | ~24 |
+
+### What's actually load-bearing
+
+1. **A format-rich `logToConsole` call once per second.** This alone
+   gets +10 fps over baseline (12 → 22). Constant-string logs do
+   nothing — the `%f`/`%.1f` format processing is what triggers
+   whatever firmware activity helps.
+2. **At least 4× per-update `getElapsedTime` calls** on top of the
+   log. This adds another +3 fps (22 → 25). 1× syscall is not
+   enough; somewhere between 1 and 4 the threshold is crossed (we
+   didn't bisect 2 vs 3 — irrelevant for production).
+3. Log frequency past once/sec: **does nothing**. ka3 (5×/sec) was
+   no faster than ka2 (1×/sec), just more spam.
+4. Per-update FP math: **negative**. ka1 (math + log) was ~2 fps
+   *worse* than ka2 (log only). The original keepalive's float
+   accumulator was overhead, not a contributor.
+
+### What ships
+
+The minimum effective recipe in `update()`:
+
+```c
+(void)pd->system->getElapsedTime();
+(void)pd->system->getElapsedTime();
+(void)pd->system->getElapsedTime();
+(void)pd->system->getElapsedTime();
+
+static int   keepalive_count = 0;
+static int   keepalive_total = 0;
+static unsigned int keepalive_t0 = 0;
+keepalive_total++;
+if (++keepalive_count >= 30) {
+    /* once-per-second format-rich log with %f arg */
+}
+```
+
+~25 fps on heavy Japanese Togepi (slightly better than the original
+keepalive at 24 fps because the math overhead is gone). Same code
+size as before, half the moving parts.
+
+### Hypothesis on the firmware mechanism
+
+We still don't know exactly why this works. Best guess based on the
+data shape:
+
+- The format-rich log triggers a firmware-side I/O path
+  (format → USB serial write) that keeps some scheduler/clock state
+  warm. Once-per-second is enough to "refresh" it.
+- The 4× per-update `getElapsedTime` calls provide enough syscall
+  density per update to keep the M7 from dropping to a low-power
+  state during pure-userland frames. 1× isn't enough; 4× is.
+- Per-update FP math doesn't trigger either mechanism — it's just
+  CPU work that competes with the emulator. Hence the -2 fps
+  penalty when added.
+
+This is consistent with a low-power-mode / DVFS-like behavior at
+the firmware level that's invisible from user-space, but treats
+"frequent syscall traffic" + "periodic I/O activity" as the
+heuristic for "this app is doing real work, give it full perf."
+
+If this guess is right, a hypothetical `pd->system->keepActive()`
+API in a future SDK would replace the whole block. Until then, the
+recipe stays.
 
 ## ITCM correction (2026-05-09)
 
@@ -658,6 +740,102 @@ current layout already in place.
 5. If gain is small/negative: revert; computed-goto isn't a fit
    here for whatever reason (maybe `MinxCPU_OnRead` memory latency
    dominates instead of dispatch overhead).
+
+## Batch-dispatcher experiment — reverted (2026-05-09)
+
+Tried a partial step toward computed-goto: refactored `MinxCPU_XX.c`
+into a dual-mode source that emits either the original
+`MinxCPU_Exec(void)` or a new `MinxCPU_ExecBatch(int target_cycles)`
+behind `POKEMINI_BATCH_DISPATCH`. Batch mode wraps the existing
+switch in a `while (cycles < target_cycles)` loop and inlines the
+StallCPU + Status pre-amble checks per opcode, eliminating the
+Hardware.c outer loop's per-opcode function call into
+`MinxCPU_Exec`. `EXEC_RETURN(n)` macro abstracts the
+return-vs-goto differences between the two modes.
+
+### Implementation gotcha worth recording
+
+First version of `EXEC_RETURN` used `do { cycles += n; continue; }
+while (0)`. Bug: `continue` inside the trivial do-while terminates
+*it*, then control falls through to the next switch case. The
+intent was to escape to the outer `while (cycles < target_cycles)`,
+but `continue` in C only escapes the innermost loop. After
+emergency rebuild for the user, the symptom was the game running
+at ~0.4 fps with each PM frame taking ~1.5 seconds (because each
+`Fetch8()` triggered the entire sequence of opcode handlers from
+that opcode onward).
+
+Fix: use `goto exec_iter_end;` instead. `goto` cleanly bypasses
+nested `do { ... } while (0)` and switch scopes to a single label
+at the bottom of the loop body. This is the right pattern any time
+you need a "continue outer loop" from inside macros that wrap their
+body in trivial loops.
+
+### Result on Japanese Togepi
+
+| | Linker-tuning baseline | Batch dispatcher |
+| --- | --- | --- |
+| Steady-state fps | ~25 | ~23-25 |
+| Steady-state PM frames/sec | ~60-62 | ~55-60 |
+| Best-window PM frames | 69 (28 fps) | **72 (29.8 fps, real-time!)** |
+| Worst-stall fps | ~9.9 | **1.5-4** |
+
+Best windows hit real-time PM speed (a first), but average is no
+better than the linker-tuning baseline and stalls are
+**dramatically worse** (~2 fps vs ~10 fps). User also reported a
+visual anomaly during the intro→gameplay transition (post-boot
+sequence flashed for half a second after name input). Net: the
+refactor introduced enough variance and possible subtle correctness
+issues to be a clear regression, not an improvement.
+
+### Why dispatch overhead wasn't the bottleneck
+
+The hypothesis was that the Hardware.c → MinxCPU_Exec function
+call per opcode dominated the dispatch cost. The data says
+otherwise: each opcode does enough real work
+(`MinxCPU_OnRead(1, …)` accesses to `PM_RAM` / `PM_ROM`,
+`ADD8`/`AND8`/etc. with status-flag updates) that the function
+call setup is a small fraction. Eliminating it earned us nothing
+measurable on average and HURT us on heavy busy-waits — likely
+because the per-opcode preamble (Shift_U, Status, StallCPU) now
+runs every opcode instead of being skipped between calls when the
+outer Hardware.c loop checked StallCPU first.
+
+The actual bottleneck appears to be **memory-read latency on
+PM_ROM accesses inside opcode handlers**, not dispatch overhead.
+That's not addressable by interpreter-loop restructuring; it'd
+need either DTCM-equivalent placement of PM_RAM (which the SDK
+doesn't expose, same caveat as ITCM) or a fundamentally different
+emulator architecture (JIT, dynarec — way out of scope).
+
+### Where the work landed
+
+- `source/MinxCPU_XX.c`: reverted to original `MinxCPU_Exec(void)`
+  with `return N;` per case. Keeps the `POKEMINI_HOT_EXEC` tag
+  (the linker-tuning win, which is independent and still active).
+- `source/Hardware.c`: reverted to upstream `MinxCPU_Exec()` calls
+  in both `PokeMini_EmulateCycles` and `PokeMini_EmulateFrame`. No
+  `#ifdef POKEMINI_BATCH_DISPATCH` guards anymore.
+- `source/MinxCPU.h`: reverted (no `MinxCPU_ExecBatch` declaration).
+- `platform/playdate/CMakeLists.txt`: `POKEMINI_BATCH_DISPATCH`
+  removed from compile definitions.
+
+### Production ceiling
+
+With every Playdate-friendly lever exercised (section
+consolidation, 4 KB alignment of `MinxCPU_Exec`, `-Os` over `-O3`,
+`-falign-loops=32`, custom linker script, perf-keepalive, the
+single-opcode `MinxCPU_Exec`), the production ceiling on heavy
+Japanese ROMs is **~86% real PM speed** (light scenes and English
+ROMs at 100%). This is where things stay until either:
+- A computed-goto rewrite of the *entire* dispatch chain (with
+  per-opcode handlers chaining directly via `goto *`, eliminating
+  the central switch entirely) is attempted — much bigger refactor
+  than the batch experiment, with similarly uncertain payoff.
+- A future Playdate SDK exposes ITCM/DTCM access, allowing the
+  dispatcher and PM_RAM to live in 1-cycle on-chip memory.
+- Someone with deeper Cortex-M7 expertise figures out an avenue
+  none of us have considered.
 
 ## Performance levers (quick reference)
 
