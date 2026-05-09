@@ -60,6 +60,10 @@ static uint8_t *rom_buf = NULL;
 // Audio source handle
 static SoundSource *audio_source = NULL;
 
+// System menu item for LCD quality/performance switching.
+static PDMenuItem *lcd_mode_menu_item = NULL;
+static const char *lcd_mode_options[] = { "Soft", "Fast" };
+
 // Playdate physical button names used by the joystick subsystem
 static char *PD_KeysNames[] = {
 	"Off",    // -1
@@ -234,6 +238,35 @@ static void render_screen(void)
 	uint8_t *fb = pd->graphics->getFrame();
 	const int byte_x = SCREEN_X / 8;  // 7
 	const int pm_bytes = PM_W / 8;    // 12
+
+	if (CommandLine.lcdmode == LCDMODE_2SHADES) {
+		for (int y = 0; y < PM_H; y++) {
+			const uint8_t *srcD = &LCDPixelsD[y * PM_W];
+			uint8_t *dst0 = fb + (SCREEN_Y + y * PM_SCALE)     * LCD_ROWSIZE + byte_x;
+			uint8_t *dst1 = dst0 + LCD_ROWSIZE;
+			uint8_t *dst2 = dst1 + LCD_ROWSIZE;
+
+			for (int bx = 0; bx < pm_bytes; bx++) {
+				// Fast LCD mode: use the current digital PM frame directly.
+				// Playdate bit set = white/off, while LCDPixelsD non-zero = lit/on.
+				uint8_t b =
+					((srcD[0] == 0) << 7) | ((srcD[1] == 0) << 6) |
+					((srcD[2] == 0) << 5) | ((srcD[3] == 0) << 4) |
+					((srcD[4] == 0) << 3) | ((srcD[5] == 0) << 2) |
+					((srcD[6] == 0) << 1) | ((srcD[7] == 0)     );
+				srcD += 8;
+
+				const uint8_t *e = expand_lut[b];
+				dst0[0] = e[0]; dst0[1] = e[1]; dst0[2] = e[2];
+				dst1[0] = e[0]; dst1[1] = e[1]; dst1[2] = e[2];
+				dst2[0] = e[0]; dst2[1] = e[1]; dst2[2] = e[2];
+				dst0 += 3; dst1 += 3; dst2 += 3;
+			}
+		}
+
+		pd->graphics->markUpdatedRows(SCREEN_Y, SCREEN_Y + PM_H * PM_SCALE - 1);
+		return;
+	}
 
 	// Thresholds adapt to the game's current contrast setting (Pixel0/Pixel1
 	// intensities change with MinxLCD.Contrast). Boundaries at level 1.5 and
@@ -463,6 +496,20 @@ static void menu_item_picker_cb(void *userdata)
 	return_to_picker();
 }
 
+static void menu_item_lcd_mode_cb(void *userdata)
+{
+	(void)userdata;
+	if (!lcd_mode_menu_item) return;
+
+	int fast = pd->system->getMenuItemValue(lcd_mode_menu_item);
+	int new_mode = fast ? LCDMODE_2SHADES : LCDMODE_ANALOG;
+	if (CommandLine.lcdmode == new_mode) return;
+
+	CommandLine.lcdmode = new_mode;
+	PokeMini_ApplyChanges();
+	LCDDirty = MINX_DIRTYSCR;
+}
+
 static void picker_update(void)
 {
 	PDButtons cur, pushed, released;
@@ -629,6 +676,13 @@ int eventHandler(PlaydateAPI *playdate, PDSystemEvent event, uint32_t arg)
 		// System menu item: lets the player return to the ROM picker without
 		// quitting the app. Persists for the lifetime of the process.
 		pd->system->addMenuItem("ROM Picker", menu_item_picker_cb, NULL);
+		lcd_mode_menu_item = pd->system->addOptionsMenuItem(
+			"LCD Mode", lcd_mode_options, 2, menu_item_lcd_mode_cb, NULL);
+		if (lcd_mode_menu_item) {
+			// Soft is the default: analog decay suppresses Pokemon Mini LCD
+			// flicker. Fast is available for performance measurements.
+			pd->system->setMenuItemValue(lcd_mode_menu_item, 0);
+		}
 
 		// Scan /Shared/Emulation/pm/games/ for *.min ROMs.
 		// 0 ROMs -> boot FreeBIOS only (its own no-cart splash).

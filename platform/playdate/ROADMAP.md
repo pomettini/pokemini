@@ -134,8 +134,10 @@ Use Playdate's system menu API (`pd->system->addMenuItem`,
 `addOptionsMenuItem`) to expose:
 - **Reset game** (PokeMini_Reset)
 - **Audio**: on / off (toggle CommandLine.sound, mute the audio source)
-- **LCD mode**: smooth (ANALOG, current) / sharp (2SHADES) — see NOTES.md
-  for the tradeoff
+- ~~**LCD mode**~~ — wired as `Soft` / `Fast` in the Playdate system menu.
+  `Soft` is the default ANALOG smoothing path; `Fast` switches to raw
+  `LCDMODE_2SHADES` for performance testing. The short label is intentional:
+  Playdate option labels clip after roughly five characters.
 - **C button**: which input does C map to (see 2a)
 - **Save state** / **Load state** slots (see 2e)
 - ~~**Quit to ROM picker**~~ — wired up (see 1c).
@@ -251,7 +253,8 @@ A reasonable shipping path:
 6. **2b, 3c** — pause/resume handling (an hour each)
 7. **3a, 3b** — per-ROM data isolation + empty-state hint (half day)
 8. **2a, 2d** — C button mapping (likely on the now-free crank) +
-   settings menu wiring everything together (a day)
+   remaining settings menu wiring (audio/reset/save-state items; LCD
+   mode and ROM picker are already wired)
 9. **2e, 1e** — save states UI + card art when graphics are ready
    (half day)
 10. **1d (Credits)**, **3d, 3e, 3f** — in-app credits + polish pass

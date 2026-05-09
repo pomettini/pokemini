@@ -855,9 +855,14 @@ If perf regresses:
   go into `.text.hot`.
 - `pd->display->setRefreshRate(30)` — stays at 30. PM at 72 Hz doesn't
   divide evenly into anything the Playdate panel comfortably runs.
-- `CommandLine.lcdmode` — currently `LCDMODE_ANALOG`. Adds ~2-3% CPU vs
+- `CommandLine.lcdmode` — defaults to `LCDMODE_ANALOG`, exposed in the
+  Playdate system menu as `LCD Mode: Soft`. This adds ~2-3% CPU vs
   `LCDMODE_2SHADES` (DecayRefresh runs every PRC frame) but is the only
-  mode that gives smooth gray-suppression under motion. See next section.
+  mode that gives smooth gray-suppression under motion. The menu's `Fast`
+  option switches to raw `LCDMODE_2SHADES` for measurement; first
+  subjective device test did not feel noticeably faster. The `Soft` label
+  is intentionally short because Playdate option labels clip at roughly
+  five characters.
 
 Things **not** worth changing: the audio path (already callback-driven
 like NDS), the `LCDDirty` early-return in `render_screen`, the 12/5
@@ -875,6 +880,12 @@ Quick pick: if you're tweaking, the threshold values `t_off` and `t_on`
 in `render_screen` are the main knobs (currently 3/8 and 5/8 of the
 contrast span). Tightening the gap = less dither, more "binary"; widening
 = softer fades, more dither.
+
+The Playdate system menu exposes this as `LCD Mode: Soft/Fast`:
+- `Soft` (default) = `LCDMODE_ANALOG` + thresholded checkerboard.
+- `Fast` = `LCDMODE_2SHADES` + direct `LCDPixelsD` blit, kept as a
+  measurement toggle even though the first device test did not produce an
+  obvious perceived speedup.
 
 ### Approaches tried, in order
 

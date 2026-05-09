@@ -29,6 +29,12 @@ Return to the picker mid-game from Playdate's system menu.
 
 Pokémon Mini's **C** button isn't mapped yet.
 
+## System Menu
+
+- **ROM Picker** returns to the ROM list.
+- **LCD Mode**: `Soft` is the default smoothed display mode; `Fast` uses
+  raw 2-shade LCD output for performance testing.
+
 ## Known limitations
 
 - No EEPROM save on device.
