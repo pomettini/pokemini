@@ -18,24 +18,64 @@
 
 #include "PokeMini.h"
 
+#ifdef PD_PERF_DIAG
+extern unsigned int PDPerf_NowUs(void);
+extern unsigned int PDPerf_CpuUs;
+extern unsigned int PDPerf_TimersUs;
+extern unsigned int PDPerf_PrcUs;
+extern unsigned int PDPerf_AudioUs;
+#endif
+
 // Emulate X cycles, return remaining
 int PokeMini_EmulateCycles(int lcylc)
 {
 	if (RequireSoundSync) {
 		while (lcylc > 0) {
+#ifdef PD_PERF_DIAG
+			unsigned int t0 = PDPerf_NowUs();
+#endif
 			if (StallCPU) PokeHWCycles = StallCycles;
 			else PokeHWCycles = MinxCPU_Exec();
+#ifdef PD_PERF_DIAG
+			PDPerf_CpuUs += PDPerf_NowUs() - t0;
+			t0 = PDPerf_NowUs();
+#endif
 			MinxTimers_Sync();
+#ifdef PD_PERF_DIAG
+			PDPerf_TimersUs += PDPerf_NowUs() - t0;
+			t0 = PDPerf_NowUs();
+#endif
 			MinxPRC_Sync();
+#ifdef PD_PERF_DIAG
+			PDPerf_PrcUs += PDPerf_NowUs() - t0;
+			t0 = PDPerf_NowUs();
+#endif
 			MinxAudio_Sync();
+#ifdef PD_PERF_DIAG
+			PDPerf_AudioUs += PDPerf_NowUs() - t0;
+#endif
 			lcylc -= PokeHWCycles;
 		}
 	} else {
 		while (lcylc > 0) {
+#ifdef PD_PERF_DIAG
+			unsigned int t0 = PDPerf_NowUs();
+#endif
 			if (StallCPU) PokeHWCycles = StallCycles;
 			else PokeHWCycles = MinxCPU_Exec();
+#ifdef PD_PERF_DIAG
+			PDPerf_CpuUs += PDPerf_NowUs() - t0;
+			t0 = PDPerf_NowUs();
+#endif
 			MinxTimers_Sync();
+#ifdef PD_PERF_DIAG
+			PDPerf_TimersUs += PDPerf_NowUs() - t0;
+			t0 = PDPerf_NowUs();
+#endif
 			MinxPRC_Sync();
+#ifdef PD_PERF_DIAG
+			PDPerf_PrcUs += PDPerf_NowUs() - t0;
+#endif
 			lcylc -= PokeHWCycles;
 		}
 	}
@@ -55,24 +95,56 @@ int PokeMini_EmulateFrame(void)
 	if (RequireSoundSync) {
 		while (PokeMini_EmulateFrameRun) {
 			PokeHWCycles = 0;
+#ifdef PD_PERF_DIAG
+			unsigned int t0 = PDPerf_NowUs();
+#endif
 			while (PokeHWCycles < synccylc) {
 				if (StallCPU) PokeHWCycles += StallCycles;
 				else PokeHWCycles += MinxCPU_Exec();
 			}
+#ifdef PD_PERF_DIAG
+			PDPerf_CpuUs += PDPerf_NowUs() - t0;
+			t0 = PDPerf_NowUs();
+#endif
 			MinxTimers_Sync();
+#ifdef PD_PERF_DIAG
+			PDPerf_TimersUs += PDPerf_NowUs() - t0;
+			t0 = PDPerf_NowUs();
+#endif
 			MinxPRC_Sync();
+#ifdef PD_PERF_DIAG
+			PDPerf_PrcUs += PDPerf_NowUs() - t0;
+			t0 = PDPerf_NowUs();
+#endif
 			MinxAudio_Sync();
+#ifdef PD_PERF_DIAG
+			PDPerf_AudioUs += PDPerf_NowUs() - t0;
+#endif
 			lcylc += PokeHWCycles;
 		}
 	} else {
 		while (PokeMini_EmulateFrameRun) {
 			PokeHWCycles = 0;
+#ifdef PD_PERF_DIAG
+			unsigned int t0 = PDPerf_NowUs();
+#endif
 			while (PokeHWCycles < synccylc) {
 				if (StallCPU) PokeHWCycles += StallCycles;
 				else PokeHWCycles += MinxCPU_Exec();
 			}
+#ifdef PD_PERF_DIAG
+			PDPerf_CpuUs += PDPerf_NowUs() - t0;
+			t0 = PDPerf_NowUs();
+#endif
 			MinxTimers_Sync();
+#ifdef PD_PERF_DIAG
+			PDPerf_TimersUs += PDPerf_NowUs() - t0;
+			t0 = PDPerf_NowUs();
+#endif
 			MinxPRC_Sync();
+#ifdef PD_PERF_DIAG
+			PDPerf_PrcUs += PDPerf_NowUs() - t0;
+#endif
 			lcylc += PokeHWCycles;
 		}
 	}

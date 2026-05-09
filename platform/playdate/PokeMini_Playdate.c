@@ -30,6 +30,50 @@
 
 static PlaydateAPI *pd;
 
+#ifdef PD_PERF_DIAG
+unsigned int PDPerf_CpuUs = 0;
+unsigned int PDPerf_TimersUs = 0;
+unsigned int PDPerf_PrcUs = 0;
+unsigned int PDPerf_AudioUs = 0;
+
+static unsigned int pdperf_emu_us = 0;
+static unsigned int pdperf_input_us = 0;
+static unsigned int pdperf_render_us = 0;
+static unsigned int pdperf_update_us = 0;
+static unsigned int pdperf_updates = 0;
+static unsigned int pdperf_pm_frames = 0;
+
+unsigned int PDPerf_NowUs(void)
+{
+	return (unsigned int)(pd->system->getElapsedTime() * 1000000.0f);
+}
+
+static void pdperf_log_and_reset(void)
+{
+	unsigned int accounted =
+		pdperf_emu_us + pdperf_input_us + pdperf_render_us;
+	unsigned int misc = (pdperf_update_us > accounted)
+		? pdperf_update_us - accounted : 0;
+
+	pd->system->logToConsole(
+		"diag: upd=%u pm=%u total=%uus emu=%u cpu=%u tim=%u prc=%u aud=%u input=%u render=%u misc=%u",
+		pdperf_updates, pdperf_pm_frames, pdperf_update_us,
+		pdperf_emu_us, PDPerf_CpuUs, PDPerf_TimersUs, PDPerf_PrcUs,
+		PDPerf_AudioUs, pdperf_input_us, pdperf_render_us, misc);
+
+	PDPerf_CpuUs = 0;
+	PDPerf_TimersUs = 0;
+	PDPerf_PrcUs = 0;
+	PDPerf_AudioUs = 0;
+	pdperf_emu_us = 0;
+	pdperf_input_us = 0;
+	pdperf_render_us = 0;
+	pdperf_update_us = 0;
+	pdperf_updates = 0;
+	pdperf_pm_frames = 0;
+}
+#endif
+
 const char *AppName = "PokeMini " PokeMini_Version " Playdate";
 
 // Platform menu (required by UI.c)
@@ -550,6 +594,10 @@ static int update(void *userdata)
 		return 1;
 	}
 
+#ifdef PD_PERF_DIAG
+	unsigned int update_start = PDPerf_NowUs();
+#endif
+
 	static int frame_accum = 0;
 	frame_accum += 12;
 	int pm_frames = frame_accum / 5;
@@ -594,10 +642,28 @@ static int update(void *userdata)
 		}
 	}
 
+#ifdef PD_PERF_DIAG
+	unsigned int t0 = PDPerf_NowUs();
+#endif
 	for (int i = 0; i < pm_frames; i++) PokeMini_EmulateFrame();
+#ifdef PD_PERF_DIAG
+	pdperf_emu_us += PDPerf_NowUs() - t0;
+	pdperf_pm_frames += (unsigned int)pm_frames;
+	t0 = PDPerf_NowUs();
+#endif
 
 	handle_input();
+#ifdef PD_PERF_DIAG
+	pdperf_input_us += PDPerf_NowUs() - t0;
+	t0 = PDPerf_NowUs();
+#endif
 	render_screen();
+#ifdef PD_PERF_DIAG
+	pdperf_render_us += PDPerf_NowUs() - t0;
+	pdperf_update_us += PDPerf_NowUs() - update_start;
+	pdperf_updates++;
+	if (pdperf_updates >= 30) pdperf_log_and_reset();
+#endif
 
 	return 1;
 }

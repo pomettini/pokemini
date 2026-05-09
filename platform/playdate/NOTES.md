@@ -977,6 +977,67 @@ than meaningful size pressure.
 Conclusion: reverted to `Hardware.c -O2`. Keep the current stack as
 `MinxTimers.c -O3` plus `Hardware.c -O2`.
 
+### Temporary phase diagnostic build — completed (2026-05-09)
+
+Diagnostic after the per-file optimization stack landed. The diagnostic build
+defined `PD_PERF_DIAG`, which adds timing probes around:
+`PokeMini_EmulateFrame()`, the CPU execution chunk in `Hardware.c`,
+`MinxTimers_Sync()`, `MinxPRC_Sync()`, `MinxAudio_Sync()`, input, render,
+and outer update/misc time.
+
+Logs still include the normal `perf:` keepalive line. The diagnostic build
+also prints one `diag:` line every 30 Playdate updates:
+
+```text
+diag: upd=30 pm=72 total=...us emu=... cpu=... tim=... prc=... aud=... input=... render=... misc=...
+```
+
+Result on Japanese Togepi, smooth LCD mode, first three levels: diagnostic
+overhead dropped display fps to ~18-19, so use the relative phase split only.
+Across 48 diagnostic windows, and more importantly the steady windows after
+startup/outliers, the shape was:
+
+| Phase | Share of total update time | Share of emulation time |
+| --- | ---: | ---: |
+| Emulation wrapper total | ~98.7% | - |
+| CPU dispatch chunk | ~67-68% | ~68-69% |
+| PRC sync | ~15-16% | ~16% |
+| Timers sync | ~8% | ~8% |
+| Render | ~1% | - |
+| Input/misc/audio | ~0-1% | ~0-8% unaccounted loop/instrumentation overhead |
+
+Conclusion: the remaining bottleneck is still overwhelmingly
+`MinxCPU_Exec()`/dispatch. Playdate-side render, input, and audio are not
+worth chasing next. `PD_PERF_DIAG` is now disabled in CMake for the normal
+keeper build, but the guarded probes can stay in source for future diagnostics.
+
+### Per-file optimization experiment: MinxCPU_XX.c -O2 — reverted (2026-05-09)
+
+After the phase diagnostic confirmed CPU dispatch still dominates, tried
+keeping the current keeper stack (`MinxTimers.c -O3`, `Hardware.c -O2`,
+global `-Os -falign-loops=32`) and additionally compiling only
+`source/MinxCPU_XX.c` with `-O2`.
+
+Rationale: `MinxCPU_XX.c` contains the main 256-opcode `MinxCPU_Exec`
+dispatcher. This is the largest remaining hot bucket, but also the riskiest
+file to expand because the M7 Rev A has only a 4 KB I-cache. This A/B checks
+whether GCC's `-O2` scheduling is worth the likely code growth before doing a
+computed-goto rewrite.
+
+Build note: `.text` grew to 122934 bytes, roughly +10 KB over the current
+keeper's 112694 bytes. That is a large expansion, so watch for I-cache
+regression despite the dispatcher-local optimization.
+
+Result on Japanese Togepi, smooth LCD mode, first three levels:
+average display rate was ~23.6 fps over 50 measured windows, with only 6
+windows at or above 25 fps. This regressed badly against the keeper stack
+(`Hardware.c -O2` + `MinxTimers.c -O3`, ~25.9 fps with 37 windows >=25 fps).
+
+Conclusion: reverted. The main dispatcher is too sensitive to code growth for
+a per-file `-O2` flag. The next meaningful path is source-level dispatch work
+(computed-goto or similarly locality-aware restructuring), not broader
+optimization flags on `MinxCPU_XX.c`.
+
 ## LCD shading / dither suppression (2026-05-03)
 
 PM games fake gray by toggling pixels every native frame (72 Hz). Real
