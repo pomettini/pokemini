@@ -111,6 +111,17 @@ if (TOOLCHAIN STREQUAL "armgcc")
     target_compile_options(${TARGET_NAME} PRIVATE -Os -falign-loops=32)
     target_link_options(${TARGET_NAME} PRIVATE -Os)
 
+    # Perf tweak: keep the CPU dispatcher at -Os for I-cache locality, but
+    # let timer sync code use -O3. This slightly edged out MinxTimers.c -O2
+    # on heavy Togepi JP without meaningful code growth.
+    set_source_files_properties(${POKEMINI_ROOT}/source/MinxTimers.c
+        PROPERTIES COMPILE_OPTIONS -O3)
+
+    # Perf tweak: Hardware.c owns the per-frame CPU/timer/PRC sync loop.
+    # -O2 here clearly improved heavy Togepi JP while adding only ~256 bytes.
+    set_source_files_properties(${POKEMINI_ROOT}/source/Hardware.c
+        PROPERTIES COMPILE_OPTIONS -O2)
+
     # Custom linker script: places .text.hot (POKEMINI_HOT-tagged functions)
     # at the lowest .text addresses so the PM dispatcher and its tightest
     # helpers cluster together for I-cache locality.

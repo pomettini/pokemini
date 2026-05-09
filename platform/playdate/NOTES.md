@@ -868,6 +868,93 @@ Things **not** worth changing: the audio path (already callback-driven
 like NDS), the `LCDDirty` early-return in `render_screen`, the 12/5
 fractional pacing pattern.
 
+### Fast instruction fetch experiment — reverted (2026-05-09)
+
+Tried a Playdate-only `POKEMINI_FAST_FETCH` path in `Fetch8()` that
+bypassed `MinxCPU_OnRead()` for the common cartridge-ROM instruction
+fetch case (`addr >= 0x2100 && PM_ROM`) and fell back to the callback
+for BIOS/RAM/I/O/no-cart behavior.
+
+Result on Japanese Togepi, smooth LCD mode, first three levels:
+average display rate was ~23.3 fps over 51 measured windows, with
+steady windows mostly around 24-25 fps and scene stalls down to
+~11.8/16.2/17.1 fps. That is not an improvement over the documented
+post-linker-tuning baseline. The added inline branch/check also grew
+`.text` by ~528 bytes, which may be enough to offset any saved callback
+cost on the M7's small I-cache.
+
+Conclusion: reverted. `MinxCPU_OnRead()` is already in the hot section
+near the dispatcher; the function-call cost was not the remaining
+bottleneck.
+
+### Per-file optimization experiment: MinxPRC.c -O2 — reverted (2026-05-09)
+
+Tried keeping the global device build at `-Os -falign-loops=32`, but
+compiling only `source/MinxPRC.c` with `-O2`.
+
+Result on Japanese Togepi, smooth LCD mode, first three levels:
+average display rate was ~22.2 fps over 50 measured windows. Steady
+sections sat mostly around 22.7-23.2 fps instead of the earlier 24-25 fps
+band, with stalls down to ~13.3/16.8/16.9 fps. `.text` grew to 115190
+bytes. Net regression.
+
+Conclusion: reverted. PRC `-O2` likely bloats code enough to lose more
+I-cache locality than it gains from local optimization.
+
+### Per-file optimization experiment: MinxTimers.c -O2 — superseded (2026-05-09)
+
+After PRC `-O2` regressed, tried keeping the global device build at
+`-Os -falign-loops=32`, but compiling only `source/MinxTimers.c` with
+`-O2`. Timer sync is a smaller hot path than PRC, so the code-size risk
+is lower.
+
+Result on Japanese Togepi, smooth LCD mode, first three levels:
+average display rate was ~24.3 fps over 52 measured windows, with 28
+windows at or above 25 fps and 8 at or above 26 fps. Steady sections
+felt and measured smoother than the previous variants. `.text` grew only
+to 112406 bytes, much smaller than the PRC `-O2` regression build.
+
+Conclusion: this was the first positive per-file optimization, but
+`MinxTimers.c -O3` slightly edged it out in the next A/B. Keep this result as
+the fallback if the `-O3` result does not reproduce.
+
+### Per-file optimization experiment: MinxTimers.c -O3 — kept in current stack (2026-05-09)
+
+After `MinxTimers.c -O2` improved Togepi JP, tried keeping the global device
+build at `-Os -falign-loops=32`, but compiling only `source/MinxTimers.c`
+with `-O3`.
+
+Result on Japanese Togepi, smooth LCD mode, first three levels:
+average display rate was ~24.4 fps over 51 measured windows, with 31
+windows at or above 25 fps and 5 at or above 26 fps. This is a tiny gain over
+the `-O2` timer build (~24.3 fps, 28 windows >=25 fps, 8 windows >=26 fps),
+but it is directionally positive and `.text` only grew to 112438 bytes.
+
+Conclusion: keep `MinxTimers.c -O3` in the optimization stack. It was the
+current best by itself, then `Hardware.c -O2` improved the stack further.
+
+### Per-file optimization experiment: Hardware.c -O2 — kept (2026-05-09)
+
+After `MinxTimers.c -O3` became the current keeper, tried keeping the global
+device build at `-Os -falign-loops=32`, keeping `source/MinxTimers.c` at
+`-O3`, and additionally compiling only `source/Hardware.c` with `-O2`.
+
+Rationale: `Hardware.c` owns the outer PM frame execution loop and calls
+`MinxTimers_Sync()` plus `MinxPRC_Sync()` repeatedly. It is much smaller than
+the CPU and PRC translation units, so this may improve the control loop without
+the larger I-cache/code-size risk seen with `MinxPRC.c -O2`.
+
+Result on Japanese Togepi, smooth LCD mode, first three levels:
+average display rate was ~25.9 fps over 52 measured windows, with 37
+windows at or above 25 fps, 36 at or above 26 fps, and 27 at or above 27 fps.
+This is a clear improvement over the prior `MinxTimers.c -O3` keeper
+(~24.4 fps, 31 windows >=25 fps). `.text` grew only to 112694 bytes, +256
+bytes over the timer-only `-O3` build.
+
+Conclusion: keep `Hardware.c -O2` together with `MinxTimers.c -O3`. The next
+experiment should be chosen cautiously: the broad/hot files can regress from
+I-cache pressure, as `MinxPRC.c -O2` already showed.
+
 ## LCD shading / dither suppression (2026-05-03)
 
 PM games fake gray by toggling pixels every native frame (72 Hz). Real
