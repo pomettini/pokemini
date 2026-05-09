@@ -165,20 +165,25 @@ static void handle_input(void)
 	if (pushed   & kButtonRight) JoystickButtonsEvent(5, 1);
 	if (released & kButtonRight) JoystickButtonsEvent(5, 0);
 
-	// Accelerometer returns x/y/z in g-units. At rest the magnitude is ~1.0
-	// (gravity); a confident shake pushes it well past 1.0. Compare squared
-	// magnitudes to avoid the sqrt — threshold tuned by feel on hardware.
-	// Cooldown prevents one shake gesture from firing multiple PM events.
+	// Shake input via the accelerometer. Hardware samples at ~50 Hz and on
+	// device getAccelerometer appears to do real I²C work, so polling every
+	// 30 Hz update is wasted bandwidth — throttle to every 3rd frame
+	// (10 Hz). Human shake gestures top out around 5 Hz; this is plenty.
+	// At rest |g|² ≈ 1.0; a confident shake pushes it well past that.
+	// Cooldown prevents one gesture from firing multiple PM Shake events.
 	static int shake_cooldown = 0;
+	static int shake_poll_phase = 0;
 	if (shake_cooldown > 0) shake_cooldown--;
-
-	float ax, ay, az;
-	pd->system->getAccelerometer(&ax, &ay, &az);
-	float mag2 = ax * ax + ay * ay + az * az;
-	if (mag2 > 2.5f && shake_cooldown == 0) {
-		JoystickButtonsEvent(6, 1);
-		JoystickButtonsEvent(6, 0);
-		shake_cooldown = 6;  // ~200 ms at 30 fps
+	if (++shake_poll_phase >= 3) {
+		shake_poll_phase = 0;
+		float ax, ay, az;
+		pd->system->getAccelerometer(&ax, &ay, &az);
+		float mag2 = ax * ax + ay * ay + az * az;
+		if (mag2 > 2.5f && shake_cooldown == 0) {
+			JoystickButtonsEvent(6, 1);
+			JoystickButtonsEvent(6, 0);
+			shake_cooldown = 2;  // ~200 ms when polling every 3rd frame
+		}
 	}
 }
 
@@ -540,6 +545,10 @@ int eventHandler(PlaydateAPI *playdate, PDSystemEvent event, uint32_t arg)
 		// that to suppress flicker and give moving "gray" sprites a soft fade
 		// instead of dither smear. See render_screen for the threshold logic.
 		CommandLine.lcdmode    = LCDMODE_ANALOG;
+		// 512 is the empirical ceiling on this hardware. Tried 1024 and 2048;
+		// both break PRC frame-render timing (LCDPixelsA never populates →
+		// white PM screen, audio plays normally because it runs on a
+		// separate thread). Don't push this past 512. See NOTES.md.
 		CommandLine.synccycles = 512;
 
 		JoystickSetup("Playdate", 0, 30000, PD_KeysNames, 7, PD_KeysMapping);

@@ -248,6 +248,17 @@ iterations, summarized below so future tuning starts from data, not guesses.
    Result: light scenes hit 100% real speed with 7ms idle per call;
    heavy scenes 93%. No glitches at 512 (verified on device).
 
+   **Do not go past 512.** Tried 2048 first (white screen + audio), then
+   1024 expecting the half-step to be safe — also white screen, even
+   though it ran ~50% of full speed (so the CPU loop is fine, only
+   the PRC frame trigger is broken). The failure mode is the same in
+   both: `LCDPixelsA` never populates, PM screen renders all-white
+   over the black border, audio plays normally because it runs on a
+   separate thread reading emulator state directly. 512 really is the
+   ceiling on this hardware. Don't bother bisecting — even if some
+   value between 513 and 1023 happened to work, the gain over 512
+   would be tiny and the breakage risk varies by ROM.
+
 ### What we measured (for future reference)
 
 After step 4, added phase timing in `update()` (since stripped). Logged
@@ -315,6 +326,9 @@ Probably not worth pursuing for a 7% deficit that only shows up briefly.
 If perf regresses:
 - `CommandLine.synccycles` — currently 512, max under `PERFORMANCE`.
   Lower = more accurate hardware sync, slower. UI.c clamps to 8..512.
+  The emulator core itself accepts values higher than 512, but
+  **don't** — the PRC frame trigger becomes unreliable above that
+  and the screen renders white. See "what worked" step 5.
 - `-O3 -flto` is set per-target in `CMakeLists.txt` (armgcc branch only).
   Removing it costs ~10% emulator throughput.
 - `pd->display->setRefreshRate(30)` — stays at 30. PM at 72 Hz doesn't

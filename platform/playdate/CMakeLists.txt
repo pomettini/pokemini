@@ -94,6 +94,14 @@ target_compile_definitions(${TARGET_NAME} PRIVATE
 
 if (TOOLCHAIN STREQUAL "armgcc")
     target_link_options(${TARGET_NAME} PRIVATE --specs=nosys.specs)
-    target_compile_options(${TARGET_NAME} PRIVATE -O3 -flto)
-    target_link_options(${TARGET_NAME} PRIVATE -O3 -flto)
+    # -Os over -O3: the M7 Rev A has only a 4 KB I-cache, so PokeMini's
+    # 256-case MinxCPU_Exec dispatcher likely thrashes when compiled with
+    # -O3's aggressive inlining. -Os trades inlining for code density and
+    # may keep more of the hot loop resident. -flto still does cross-TU
+    # inlining at link time. Suggested in the Playdate "dirty optimization
+    # secrets" thread.
+    # -falign-loops=32 aligns inner-loop entry points to 32-byte (cache-
+    # line) boundaries on the M7.
+    target_compile_options(${TARGET_NAME} PRIVATE -Os -flto -falign-loops=32)
+    target_link_options(${TARGET_NAME} PRIVATE -Os -flto)
 endif()
