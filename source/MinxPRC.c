@@ -1,5 +1,5 @@
 /*
-  PokeMini - Pokémon-Mini Emulator
+  PokeMini - Pokï¿½mon-Mini Emulator
   Copyright (C) 2009-2015  JustBurn
 
   This program is free software: you can redistribute it and/or modify
@@ -115,7 +115,7 @@ int MinxPRC_SaveState(FILE *fi)
 	POKESAVESS_END(1+32);
 }
 
-void MinxPRC_Sync(void)
+POKEMINI_HOT void MinxPRC_Sync(void)
 {
 	// Process PRC Counter
 	MinxPRC.PRCCnt += MINX_PRCTIMERINC * PokeHWCycles;

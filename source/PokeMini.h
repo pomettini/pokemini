@@ -1,5 +1,5 @@
 /*
-  PokeMini - Pokémon-Mini Emulator
+  PokeMini - Pokï¿½mon-Mini Emulator
   Copyright (C) 2009-2015  JustBurn
 
   This program is free software: you can redistribute it and/or modify
@@ -21,6 +21,18 @@
 
 #include <stdint.h>
 #include <stdlib.h>
+
+// POKEMINI_HOT puts the tagged function into a custom ".text.hot" section.
+// Used on platforms with tight I-caches (Playdate Cortex-M7 Rev A: 4 KB)
+// so a custom linker script can place the dispatcher and its closest
+// callees contiguously at the lowest .text addresses, improving locality.
+// On platforms without TARGET_PLAYDATE this expands to nothing and the
+// usual section layout is used.
+#ifdef TARGET_PLAYDATE
+#define POKEMINI_HOT __attribute__((section(".text.hot")))
+#else
+#define POKEMINI_HOT
+#endif
 
 // Common functions
 #include "PMCommon.h"

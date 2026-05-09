@@ -508,7 +508,43 @@ static int update(void *userdata)
 	int pm_frames = frame_accum / 5;
 	frame_accum -= pm_frames * 5;
 
+	// PERF KEEPALIVE (do NOT strip — see NOTES.md "Perf-keepalive
+	// anomaly" entry). Empirically, removing this block drops device
+	// throughput from ~24 fps to ~12 fps on heavy ROMs even though the
+	// elf is byte-identical in the hot path. Every subset we tried —
+	// only `getElapsedTime`, only `logToConsole`, only bookkeeping —
+	// falls short individually. The minimum load-bearing set we found
+	// is: 4× `getElapsedTime` per update bracketing the emu loop, the
+	// float-accumulator math, AND a `logToConsole` call once per
+	// second. The block also doubles as a perf log — useful, but the
+	// reason it can't be stripped is performance, not diagnostics.
+	static int   keepalive_calls       = 0;
+	static int   keepalive_pm_frames   = 0;
+	static float keepalive_emu_s       = 0.0f;
+	static float keepalive_window_t0   = -1.0f;
+	if (keepalive_window_t0 < 0.0f) keepalive_window_t0 = pd->system->getElapsedTime();
+	float keepalive_emu_t0 = pd->system->getElapsedTime();
+
 	for (int i = 0; i < pm_frames; i++) PokeMini_EmulateFrame();
+
+	float keepalive_emu_t1 = pd->system->getElapsedTime();
+	keepalive_emu_s     += keepalive_emu_t1 - keepalive_emu_t0;
+	keepalive_calls     += 1;
+	keepalive_pm_frames += pm_frames;
+	if (keepalive_emu_t1 - keepalive_window_t0 >= 1.0f) {
+		float window = keepalive_emu_t1 - keepalive_window_t0;
+		pd->system->logToConsole(
+			"perf: %d calls (%.1f fps), %d PM frames in %.2fs | emu=%.0fms",
+			keepalive_calls,
+			keepalive_calls / window,
+			keepalive_pm_frames,
+			window,
+			keepalive_emu_s * 1000.0f);
+		keepalive_calls = 0;
+		keepalive_pm_frames = 0;
+		keepalive_emu_s = 0.0f;
+		keepalive_window_t0 = keepalive_emu_t1;
+	}
 
 	handle_input();
 	render_screen();

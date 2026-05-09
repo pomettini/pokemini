@@ -1,5 +1,5 @@
 /*
-  PokeMini - Pokémon-Mini Emulator
+  PokeMini - Pokï¿½mon-Mini Emulator
   Copyright (C) 2009-2015  JustBurn
 
   This program is free software: you can redistribute it and/or modify
@@ -84,7 +84,7 @@ int PokeMini_EmulateFrame(void)
 // Internal Processing
 // -------------------
 
-uint8_t MinxCPU_OnRead(int cpu, uint32_t addr)
+POKEMINI_HOT uint8_t MinxCPU_OnRead(int cpu, uint32_t addr)
 {
 #ifdef PERFORMANCE
 	if (addr >= 0x2100) {
@@ -171,7 +171,7 @@ uint8_t MinxCPU_OnRead(int cpu, uint32_t addr)
 	return 0xFF;
 }
 
-void MinxCPU_OnWrite(int cpu, uint32_t addr, uint8_t data)
+POKEMINI_HOT void MinxCPU_OnWrite(int cpu, uint32_t addr, uint8_t data)
 {
 #ifdef PERFORMANCE
 	if (addr >= 0x2100) {

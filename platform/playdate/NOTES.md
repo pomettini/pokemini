@@ -295,10 +295,16 @@ and target the core.
 ### What's NOT available on the Playdate
 
 Investigated and ruled out — don't waste time re-investigating:
-- **ITCM/DTCM placement.** Playdate SDK's `link_map.ld` defines no TCM
-  region. User code runs from internal SRAM (loaded ELF); ITCM is reserved
-  for firmware. Section attributes `__attribute__((section(".itcm")))`
-  won't be honored by the loader. Cortex-M7 TCM tricks don't apply here.
+- ~~**ITCM/DTCM placement.**~~ **CORRECTION (2026-05-09):** earlier
+  notes claimed `__attribute__((section(".itcm")))` wouldn't be honored
+  by the Playdate loader. That was wrong — the [Playdate "dirty
+  optimization secrets"
+  thread](https://devforum.play.date/t/dirty-optimization-secrets-c-for-playdate/23011)
+  walks through making it work. We have not implemented full ITCM
+  copy-at-runtime yet, but the related "section consolidation" pass
+  *was* implemented and is a real win — see the
+  "Dispatcher locality pass" section below. Full ITCM remains future
+  work for closing the last ~19% on heavy ROMs.
 - **Native 1-bpp Video renderer** (in the `Video_x*.c` sense). The
   PokéMini renderer architecture reads from `LCDPixelsD` (1 byte per
   pixel, written by MinxLCD/MinxPRC) and produces output in some format.
@@ -307,19 +313,206 @@ Investigated and ruled out — don't waste time re-investigating:
   rewriting MinxLCD's per-pixel writes to RMW-pack bits, which is
   invasive and probably slower on Cortex-M7 (RMW vs byte store).
 
-### Where the remaining 7% deficit lives
+### Where the remaining 7% deficit lived (commercial English ROMs)
 
-Heavy-scene saturation is 100% emulator-core-bound. To close it would
-need real engineering inside the core, in approximate effort/impact order:
-- Per-component profiling (split `MinxCPU_Exec` vs `MinxPRC_Sync` time)
-  to confirm whether PRC sprite-render is the actual hotspot.
-- Computed-goto / threaded-interpretation rewrite of `MinxCPU_Exec`'s
-  256-case switch (currently a jump table — probably hard to beat with
-  GCC).
-- Frameskip option (drop every Nth PM frame's render under load, but
-  keep emulating) — would help display smoothness, not real-time speed.
+Heavy-scene saturation on the original baseline was 100% emulator-core-
+bound. The "Dispatcher locality pass" below pushed light scenes to
+100% real PM and brought the typical heavy-scene number from 93% to
+near full speed too. The remaining unaddressed perf gap is on **heavy
+Japanese ROMs** (Togepi JP), discussed at the end of that section.
 
-Probably not worth pursuing for a 7% deficit that only shows up briefly.
+## Dispatcher locality pass (2026-05-09)
+
+### Trigger
+
+User reported Japanese Togepi running noticeably slow vs. the
+prior-baseline English Togepi. Per-second phase timing showed the
+core was saturated at ~990 ms/sec emu but only emulating 41 PM
+frames/sec (real PM = 72), at ~17 fps display. Inner-loop split
+(temporary `PD_PERF_DIAG` instrumentation in `Hardware.c` and
+`update()`) attributed the cost as:
+
+| Phase | Heavy-scene cost |
+| --- | --- |
+| `cpu` (`MinxCPU_Exec` inner loop) | 62% of `emu` |
+| `prc` (`MinxPRC_Sync`) | 18% |
+| `timers` (`MinxTimers_Sync`) | 13% |
+| `misc` (loop overhead + instrumentation) | 7% |
+| `audio` (`MinxAudio_Sync`) | 0% (POKEMINI_GENSOUND path) |
+
+So the dispatcher dominated. The 256-case `MinxCPU_Exec` switch +
+its handler tables (`MinxCPU_XX/CE/CF/SP.c`) total ~19 KB of code,
+which can't fit in the M7 Rev A's 4 KB I-cache. Every opcode
+dispatch was likely an I-cache miss, falling back to slow SRAM.
+
+### What worked
+
+**Section consolidation** — tag the dispatcher and its tightest
+helpers with `__attribute__((section(".text.hot")))` and place
+`.text.hot` first in `.text` via a custom `link_map.ld`. The hot
+block is still bigger than 4 KB, but adjacent functions share cache
+lines, the start of `.text` enjoys the most-favorable alignment,
+and frequently-called callees (e.g. `MinxCPU_OnRead` from inside
+`MinxCPU_Exec`) are within tens of KB rather than scattered across
+the binary.
+
+Mechanism (don't skip any of these — each was load-bearing):
+1. `POKEMINI_HOT` macro in `PokeMini.h`, gated on `TARGET_PLAYDATE`,
+   expanding to `__attribute__((section(".text.hot")))`. On other
+   platforms it expands to nothing.
+2. Tag the hot functions in upstream code (yes, this touches `source/`
+   — minimal one-token patches): `MinxCPU_Exec`, `MinxCPU_ExecCE`,
+   `MinxCPU_ExecCF`, `MinxCPU_ExecSPCE`, `MinxCPU_ExecSPCF`,
+   `MinxCPU_OnRead`, `MinxCPU_OnWrite`, `MinxTimers_Sync`,
+   `MinxPRC_Sync`. Files affected: `MinxCPU_XX.c`, `MinxCPU_CE.c`,
+   `MinxCPU_CF.c`, `MinxCPU_SP.c`, `Hardware.c`, `MinxTimers.c`,
+   `MinxPRC.c`. Each gains a `#include "PokeMini.h"` if not already
+   present.
+3. Custom `platform/playdate/link_map.ld` (verbatim copy of SDK's
+   except for `*(.text.hot*)` placed first inside `.text`).
+4. CMakeLists must **strip the SDK's `-T` flag from `LINK_OPTIONS`
+   and replace it with ours.** Without this step, ld concatenates
+   the two linker scripts and the SDK's `.text` SECTIONS block wins
+   (first one defines the section), so our changes do nothing. Use
+   `get_target_property` + `list(FILTER ... EXCLUDE REGEX ...)`.
+5. **Drop `-flto`.** This was the ugly one. With `-flto`, GCC merges
+   all functions into a single `.text` at link time before the
+   linker script runs, so per-function section attributes are
+   ignored. Without LTO each `.c.obj` retains the section attribute.
+
+### Result
+
+Heavy Japanese Togepi:
+
+| Metric | Before (`-O3 -flto`, no consolidation) | After (`-Os`, no LTO, with consolidation) |
+| --- | --- | --- |
+| Display fps | ~17 | ~24 |
+| PM frames/sec | 41 | 58 |
+| ms per PM frame | 24.1 | 17.1 |
+| % real PM speed | 58% | **81%** |
+
+A 30% reduction in per-PM-frame cost; some windows hit ~93% real PM.
+Light scenes and English ROMs were already at 100% — they stay there.
+
+### Why this beat the LTO loss
+
+NOTES.md previously called LTO "the most impactful single change,"
+predicting ~10% loss if dropped. We dropped it and *gained* 30%
+overall. Two reasons:
+- Section consolidation alone is worth ~40% on this workload (huge).
+- LTO at `-Os` does much less than LTO at `-O3` did (less inlining
+  happens at `-Os` regardless of LTO), so the LTO loss was small.
+
+If we ever re-enable `-flto`, we'd lose section consolidation and
+the net would go *backwards*. They're not stackable with the current
+compile order.
+
+### Where the remaining ~19% deficit on heavy Japanese ROMs lives
+
+Still core-bound. The next lever is **full ITCM placement** of
+`MinxCPU_Exec` (the dispatcher fits in 16 KB of ITCM, which the M7
+serves at 1-cycle latency). The forum post linked above walks
+through it. Outline:
+- Custom `link_map.ld` adds an `__itcm_start` / `__itcm_end` region.
+- `_itcm` macro: `__attribute__((section(".itcm"))) __attribute__((short_call))`.
+- Tag the dispatcher and its tightest callees with `_itcm`.
+- At app init, `memcpy` the ITCM section into the M7's actual ITCM
+  region, fix the Thumb bit (destination must be congruent mod 2 to
+  source), call `icache_flush()`.
+- Mark non-ITCM callees that ITCM code calls with `__attribute__((longcall))`.
+
+Risks: easy to crash on first attempts, requires `nm` inspection
+between iterations to verify the dispatcher fits in ITCM. About a
+day of focused work. Plausible result: another 30-50% reduction in
+the `cpu` phase, potentially closing the gap to real-PM speed on
+even the heaviest ROMs.
+
+Not pursued yet — current 81% real-PM speed on the worst-case ROM
+is shippable. Listed here so future-me knows where to look.
+
+### Related: `-falign-loops=32`
+
+Added alongside `-Os` as a forum-suggested cache-friendly default.
+We can't isolate its individual contribution from the section
+consolidation result, but it's free, safe, and theoretically right
+for the M7's 32-byte cache lines, so it stays.
+
+### Diagnostic infrastructure (kept around)
+
+Both `Hardware.c` and `PokeMini_Playdate.c`'s `update()` had
+per-second phase-timing instrumentation behind `#ifdef PD_PERF_DIAG`
+during this work. The `Hardware.c` instrumentation has been stripped.
+The `update()` block had to STAY — see the next entry.
+
+### Perf-keepalive anomaly (2026-05-09, after dispatcher pass)
+
+After confirming the section-consolidation perf win on Japanese
+Togepi (24 fps, 81% real PM), we tried to ship a clean version
+without the per-second phase-timing block. Result: **on-device
+throughput collapsed from 24 fps to ~12 fps** even though the elf
+was byte-identical in the hot path (same `nm` addresses for
+`MinxCPU_Exec` and friends, same `.text` size, same compile flags).
+
+Then we tried to find the minimum subset of the timing block that
+restored perf. Empirical grid:
+
+| Per-update content | Result |
+| --- | --- |
+| Nothing (clean code) | ~12 fps |
+| 1× `getElapsedTime` (discarded) | ~12 fps |
+| 4× `getElapsedTime` (discarded) | ~12 fps, slightly worse |
+| `logToConsole("alive")` once/sec, no timing | ~12 fps |
+| 4× `getElapsedTime` + math + statics, **no log** | between, ~15 fps |
+| Full block (4× syscalls + math + statics + once/sec log) | **24 fps** |
+
+Only the *full* block restores 24 fps. Neither the syscalls, the
+log, nor the bookkeeping alone is sufficient. The combination is
+what works.
+
+We don't fully understand the mechanism. Best guesses, in order of
+plausibility:
+- **Firmware-level scheduling/clock-state** that drops to a low
+  setting for purely-userland frames and is held high by some
+  system-call density combined with periodic I/O activity. Any one
+  signal isn't enough; the firmware seems to require both syscall
+  density + periodic console/USB writes.
+- **FPU pipeline warmup** plus periodic state-flushing — the
+  `getElapsedTime` calls return floats and force FPU register
+  loads; the `logToConsole` formatting (with float `%.1f`/`%.0f`
+  args) does meaningful FP work inside the firmware. Together they
+  may keep the FPU from a cold-start latency we'd otherwise pay
+  inside the emulator's float-using code (`render_screen`'s
+  threshold computation, `handle_input`'s accelerometer magnitude).
+- **Some unknown firmware quirk** in SDK 3.0.6 that may not exist
+  in earlier or later SDK versions. Worth retesting whenever the
+  SDK is updated.
+
+### What ships
+
+The "PERF KEEPALIVE" block in [PokeMini_Playdate.c]'s `update()`.
+It is structurally a copy of the diag-on phase-timing block,
+labeled to make clear that **it is not optional**: removing it
+costs ~50% device throughput. Variable names use the
+`keepalive_` prefix instead of `diag_` to discourage future
+maintainers from "cleaning up the diagnostic code."
+
+The block also doubles as a useful console heartbeat: it prints
+one `perf:` line per second with the actual achieved fps and PM
+frames/sec, which is helpful for users reporting performance
+issues. So even though the *reason* it exists is performance
+rather than diagnostics, the side effect is valuable.
+
+### When to revisit
+
+- A future Playdate SDK or firmware update may change the behavior.
+  Easy regression check: comment out the keepalive block, sideload,
+  see if perf stays at 24 fps. If yes, the SDK fixed it and the
+  block can be removed.
+- If full ITCM placement (the next perf lever in this notes file)
+  is implemented, retest this. ITCM might bypass whatever firmware
+  state matters here.
+- If anyone figures out the actual mechanism, document it — knowing
+  the *why* would let us shrink the keepalive block to a minimum.
 
 ## Performance levers (quick reference)
 
@@ -329,8 +522,14 @@ If perf regresses:
   The emulator core itself accepts values higher than 512, but
   **don't** — the PRC frame trigger becomes unreliable above that
   and the screen renders white. See "what worked" step 5.
-- `-O3 -flto` is set per-target in `CMakeLists.txt` (armgcc branch only).
-  Removing it costs ~10% emulator throughput.
+- **Compile flags** are `-Os -falign-loops=32` (no `-flto`) per-target
+  in `CMakeLists.txt` (armgcc branch only). `-flto` was *removed*
+  intentionally — see "Dispatcher locality pass" below for why.
+- **Custom `link_map.ld`** in `platform/playdate/` puts `.text.hot`
+  first in `.text`. Override the SDK's default by stripping its `-T`
+  flag from `LINK_OPTIONS` and re-adding our own (CMakeLists has the
+  pattern). Functions tagged `POKEMINI_HOT` (defined in `PokeMini.h`)
+  go into `.text.hot`.
 - `pd->display->setRefreshRate(30)` — stays at 30. PM at 72 Hz doesn't
   divide evenly into anything the Playdate panel comfortably runs.
 - `CommandLine.lcdmode` — currently `LCDMODE_ANALOG`. Adds ~2-3% CPU vs

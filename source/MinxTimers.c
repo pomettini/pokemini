@@ -1,5 +1,5 @@
 /*
-  PokeMini - Pokémon-Mini Emulator
+  PokeMini - Pokï¿½mon-Mini Emulator
   Copyright (C) 2009-2015  JustBurn
 
   This program is free software: you can redistribute it and/or modify
@@ -172,7 +172,7 @@ int MinxTimers_SaveState(FILE *fi)
 	POKESAVESS_END(128);
 }
 
-void MinxTimers_Sync(void)
+POKEMINI_HOT void MinxTimers_Sync(void)
 {
 	register uint32_t PreCount;
 

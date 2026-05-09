@@ -1,5 +1,5 @@
 /*
-  PokeMini - Pokémon-Mini Emulator
+  PokeMini - Pokï¿½mon-Mini Emulator
   Copyright (C) 2009-2012  JustBurn
 
   This program is free software: you can redistribute it and/or modify
@@ -18,9 +18,10 @@
 
 // Note: Any write to MinxCPU.HL.B.I needs to be reflected into MinxCPU.N.B.I
 
+#include "PokeMini.h"
 #include "MinxCPU.h"
 
-int MinxCPU_Exec(void)
+POKEMINI_HOT int MinxCPU_Exec(void)
 {
 	uint8_t I8A, I8B;
 	uint16_t I16;

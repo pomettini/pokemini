@@ -102,6 +102,29 @@ if (TOOLCHAIN STREQUAL "armgcc")
     # secrets" thread.
     # -falign-loops=32 aligns inner-loop entry points to 32-byte (cache-
     # line) boundaries on the M7.
-    target_compile_options(${TARGET_NAME} PRIVATE -Os -flto -falign-loops=32)
-    target_link_options(${TARGET_NAME} PRIVATE -Os -flto)
+    # NOTE: -flto temporarily dropped for the section-consolidation
+    # experiment. With LTO on, GCC merges all functions into a single
+    # .text at link time, ignoring per-function section attributes — the
+    # custom link_map.ld then matches nothing. If the experiment shows a
+    # net win without LTO, we're done; if not, restore -flto and look
+    # elsewhere.
+    target_compile_options(${TARGET_NAME} PRIVATE -Os -falign-loops=32)
+    target_link_options(${TARGET_NAME} PRIVATE -Os)
+
+    # Custom linker script: places .text.hot (POKEMINI_HOT-tagged functions)
+    # at the lowest .text addresses so the PM dispatcher and its tightest
+    # helpers cluster together for I-cache locality.
+    #
+    # The SDK's playdate.cmake already added -T<SDK>/link_map.ld to
+    # LINK_OPTIONS. ld treats multiple -T flags as concatenated scripts
+    # and the FIRST `.text` SECTIONS block wins, so simply appending our
+    # -T does nothing. Strip the SDK's -T from LINK_OPTIONS, then add
+    # ours. (Our copy is a verbatim port of the SDK script except for
+    # the .text.hot prelude.)
+    get_target_property(_pd_link_opts ${TARGET_NAME} LINK_OPTIONS)
+    list(FILTER _pd_link_opts EXCLUDE REGEX "link_map\\.ld$")
+    set_target_properties(${TARGET_NAME} PROPERTIES
+        LINK_OPTIONS "${_pd_link_opts}")
+    target_link_options(${TARGET_NAME} PRIVATE
+        -T${CMAKE_CURRENT_SOURCE_DIR}/link_map.ld)
 endif()
