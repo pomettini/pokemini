@@ -40,6 +40,24 @@ void MinxCPU_OpcodeDiagReset(void)
 }
 #endif
 
+#ifdef PERFORMANCE
+static inline __attribute__((always_inline)) uint8_t MinxCPU_XX_LocalRead(uint32_t addr)
+{
+	if (addr >= 0x2100) {
+		if (PM_ROM) return PM_ROM[addr & PM_ROM_Mask];
+	} else if (addr >= 0x2000) {
+		return MinxCPU_OnRead(1, addr);
+	} else if (addr >= 0x1000) {
+		return PM_RAM[addr - 0x1000];
+	} else {
+		return PM_BIOS[addr];
+	}
+	return 0xFF;
+}
+#else
+#define MinxCPU_XX_LocalRead(addr) MinxCPU_OnRead(1, addr)
+#endif
+
 POKEMINI_HOT_EXEC int MinxCPU_Exec(void)
 {
 	uint8_t I8A, I8B;
@@ -527,7 +545,7 @@ POKEMINI_HOT_EXEC int MinxCPU_Exec(void)
 			return 12;
 		OP(35) // CMP A, [#nnnn]
 			I16 = Fetch16();
-			SUB8(MinxCPU.BA.B.L, MinxCPU_OnRead(1, (MinxCPU.HL.B.I << 16) | I16));
+			SUB8(MinxCPU.BA.B.L, MinxCPU_XX_LocalRead((MinxCPU.HL.B.I << 16) | I16));
 			return 16;
 		OP(36) // CMP A, [X]
 			SUB8(MinxCPU.BA.B.L, MinxCPU_OnRead(1, MinxCPU.X.D));
@@ -844,7 +862,7 @@ POKEMINI_HOT_EXEC int MinxCPU_Exec(void)
 			return 8;
 		OP(95) // TST [HL], #nn
 			I8A = Fetch8();
-			AND8(MinxCPU_OnRead(1, MinxCPU.HL.D), I8A);
+			AND8(MinxCPU_XX_LocalRead(MinxCPU.HL.D), I8A);
 			return 12;
 		OP(96) // TST A, #nn
 			I8A = Fetch8();

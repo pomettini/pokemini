@@ -1244,6 +1244,67 @@ Post-revert sanity check on Togepi JP returned to the keeper range:
 outliers, the run spends long stretches around 27.2-27.8 fps again, confirming
 the active build is back to the pre-fastmem performance profile.
 
+### Top-level local read experiment - active test build (2026-05-10)
+
+Next A/B after broad `POKEMINI_CPU_FASTMEM` regressed. Instead of routing every
+CPU memory operand through a new helper, `source/MinxCPU_XX.c` now has a small
+local inline read helper that directly handles BIOS/RAM/ROM and falls back to
+`MinxCPU_OnRead()` only for I/O. It is used only by two read-only top-level
+opcodes:
+
+- `0x35` / `CMP A, [#nnnn]`, hot in Shock Tetris.
+- `0x95` / `TST [HL], #nn`, hot in Togepi and Pinball.
+
+Rationale: this tests whether direct memory reads help the hottest read-only
+opcode bodies without adding an extra function-call hop to every memory
+operand, and without touching writes/framebuffer behavior. Test Togepi first
+for continuity, then Shock Tetris to see whether the `0x35` path helps its
+different hot-loop shape.
+
+Build result: `PokeMini.pdx` rebuilt successfully. Device `.text` is 112822
+bytes, +128 bytes over the keeper build (`112694`). This is small enough to
+test on device.
+
+Togepi JP result: essentially neutral to slightly positive versus the keeper.
+Across 53 non-zero 30-update windows, average was ~25.96 fps, with 40 windows
+>=25 fps, 35 windows >=26 fps, 26 windows >=27 fps, and 2 windows >=28 fps.
+This is not a clear regression like broad fastmem. Keep the test active and
+sample Shock Tetris next, because that game specifically stresses the `0x35`
+`CMP A, [#nnnn]` path.
+
+Shock Tetris JP local-read result: across 87 non-zero 30-update windows,
+average was ~23.36 fps, with 80 windows >=22 fps, 21 windows >=23 fps,
+16 windows >=24 fps, 15 windows >=25 fps, and 11 windows >=27 fps. After the
+early transitions, the long steady section averaged ~22.63 fps and mostly
+clustered around 22-23 fps.
+
+Second Shock Tetris JP result, also on the same local-read `.pdx`: across
+110 non-zero windows, average was ~23.19 fps; after the same early transition
+point, the steady section averaged ~22.64 fps across 93 windows. This confirms
+the current local-read build is repeatable, but it is not a baseline/control.
+
+Clarification: no clean Shock Tetris baseline has been collected yet for this
+specific A/B. The next step is to build a real control by reverting only the
+`0x35` local-read use while keeping the `0x95` local-read use, then rerun Shock
+Tetris.
+
+Control build prepared: `0x35` / `CMP A, [#nnnn]` was restored to
+`MinxCPU_OnRead()`, while `0x95` / `TST [HL], #nn` still uses the local inline
+read helper. Use this `.pdx` as the Shock Tetris control for isolating the
+`0x35` change.
+
+Shock Tetris JP `0x95`-only control result: across 104 non-zero 30-update
+windows, average was ~22.24 fps, with 44 windows >=22 fps, 12 windows >=23 fps,
+12 windows >=24 fps, 9 windows >=25 fps, and 0 windows >=27 fps. After the
+same early transition point, the steady section averaged ~21.91 fps across
+87 windows.
+
+Comparison: the two-opcode local-read build (`0x35` + `0x95`) produced two
+repeatable steady Shock Tetris samples at ~22.63 and ~22.64 fps. The `0x95`
+only control is about 0.7 fps slower in the steady section, so `0x35` local
+read appears to be a real win for Shock Tetris. Restored the `0x35` local-read
+path in the active build.
+
 ## LCD shading / dither suppression (2026-05-03)
 
 PM games fake gray by toggling pixels every native frame (72 Hz). Real
