@@ -1344,6 +1344,23 @@ default scale remains comparable to earlier performance baselines. The 3.5x
 renderer uses the row-buffer expansion path because its alternating 3/4-pixel
 pattern is less regular.
 
+## CPU branch experiment (2026-05-10)
+
+The scoped fast-fetch experiment in `MinxCPU_XX.c` tested neutral-to-slightly
+worse on Togepi, so it was removed. A follow-up specialization of the hot
+`E7` / `JNZ #ss` opcode caused in-game audio to disappear on device, so that
+was also reverted. Keep the stock branch helper there unless a safer
+correctness test is added.
+
+## CE local-read experiment (2026-05-10)
+
+Added a narrow local-read test for `CE D0` / `MOV A, [#nnnn]`, which is hot in
+the opcode diagnostics for several games. First Togepi default-settings logs
+looked positive and audio stayed working. Extending the same helper to the
+neighboring read-only absolute loads `CE D1-D3` regressed Togepi badly, so
+those were reverted. Keep only `CE D0` for now; CE writes and branch opcodes
+stay on the stock helpers.
+
 ## LCD shading / dither suppression (2026-05-03)
 
 PM games fake gray by toggling pixels every native frame (72 Hz). Real
