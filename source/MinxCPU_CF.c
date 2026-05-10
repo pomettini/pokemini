@@ -26,6 +26,25 @@
 #define MinxCPU_OnWrite MinxCPU_FastWrite
 #endif
 
+#ifdef PERFORMANCE
+static inline __attribute__((always_inline)) uint8_t MinxCPU_CF_LocalRead(uint32_t addr)
+{
+	if (addr >= 0x2100) {
+		if (PM_ROM) return PM_ROM[addr & PM_ROM_Mask];
+	} else if (addr >= 0x2000) {
+		return MinxCPU_OnRead(1, addr);
+	} else if (addr >= 0x1000) {
+		return PM_RAM[addr - 0x1000];
+	} else {
+		return PM_BIOS[addr];
+	}
+	return 0xFF;
+}
+
+#else
+#define MinxCPU_CF_LocalRead(addr) MinxCPU_OnRead(1, addr)
+#endif
+
 POKEMINI_HOT int MinxCPU_ExecCF(void)
 {
 	uint8_t I8A;
@@ -508,7 +527,8 @@ POKEMINI_HOT int MinxCPU_ExecCF(void)
 			MinxCPU.BA.B.L = POP();
 			return 12;
 		case 0xB5: // POP B
-			MinxCPU.BA.B.H = POP();
+			MinxCPU.BA.B.H = MinxCPU_CF_LocalRead(MinxCPU.SP.D);
+			MinxCPU.SP.W.L++;
 			return 12;
 		case 0xB6: // POP L
 			MinxCPU.HL.B.L = POP();

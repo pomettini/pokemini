@@ -1361,6 +1361,17 @@ neighboring read-only absolute loads `CE D1-D3` regressed Togepi badly, so
 those were reverted. Keep only `CE D0` for now; CE writes and branch opcodes
 stay on the stock helpers.
 
+## CF stack local-read experiment (2026-05-10)
+
+Testing a single stack read optimization for `CF B5` / `POP B`, which was hot
+alongside `CF B1` in opcode diagnostics. The write-side `PUSH B` remains stock;
+`POP B` now reads through a local direct-read helper and then increments SP in
+the same order as `POP()`.
+
+First Togepi logs with `CF B5` felt slightly smoother and did not obviously
+regress. The matching single-op stack write test for `CF B1` / `PUSH B`
+regressed badly, so it was reverted. Keep `CF B5` only for now.
+
 ## LCD shading / dither suppression (2026-05-03)
 
 PM games fake gray by toggling pixels every native frame (72 Hz). Real
