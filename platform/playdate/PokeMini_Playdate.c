@@ -178,6 +178,11 @@ static uint8_t *rom_buf = NULL;
 typedef enum { MODE_PICKER, MODE_EMULATOR } AppMode;
 static volatile AppMode app_mode = MODE_PICKER;
 
+// Set on kEventPause (system menu opens), cleared on kEventResume. The audio
+// thread checks this to silence output during the system menu. volatile for
+// the same reason as app_mode — written on the main thread, read on audio.
+static volatile int emu_paused = 0;
+
 // Audio source handle
 static SoundSource *audio_source = NULL;
 
@@ -232,7 +237,7 @@ static int audio_callback(void *context, int16_t *left, int16_t *right, int len)
 	(void)context;
 	if (len <= 0) return 0;
 
-	if (app_mode != MODE_EMULATOR) {
+	if (app_mode != MODE_EMULATOR || emu_paused) {
 		memset(left, 0, (size_t)len * sizeof(*left));
 		if (right) memset(right, 0, (size_t)len * sizeof(*right));
 		return 1;
@@ -1062,6 +1067,17 @@ int eventHandler(PlaydateAPI *playdate, PDSystemEvent event, uint32_t arg)
 		}
 
 		pd->system->setUpdateCallback(update, pd);
+
+	} else if (event == kEventPause) {
+		emu_paused = 1;
+		// Release every PM key so no button stays stuck when the player returns.
+		// The Playdate runtime stops calling update() while the menu is up, so
+		// held-button state from handle_input() would otherwise persist forever.
+		for (int k = MINX_KEY_A; k <= MINX_KEY_SHOCK; k++)
+			PokeMini_KeypadEvent((uint8_t)k, 0);
+
+	} else if (event == kEventResume) {
+		emu_paused = 0;
 
 	} else if (event == kEventTerminate) {
 		if (audio_source) {

@@ -65,9 +65,12 @@ Still rough; remaining work is mostly polish:
   §3b).
 - The picker text uses a single system font and basic black/white
   rows; no scroll indicator, no thumbnails. Fine for testing.
-- Returning to the picker doesn't reset `MinxAudio` state, so a tone
-  may briefly persist if the previous ROM was emitting one. Pause/
-  mute on transition is queued in §2b/§3c.
+- ~~Returning to the picker doesn't reset `MinxAudio` state, so a tone
+  may briefly persist if the previous ROM was emitting one.~~ Fixed:
+  `audio_callback` now emits silence when `app_mode != MODE_EMULATOR`.
+- ~~ROMs with long filenames (e.g. fan-translation patches) were
+  silently dropped from the picker.~~ Fixed: `MAX_ROM_NAME` bumped to
+  128, dropped entries now log an explicit reason.
 
 ### 1d. License + attribution — partially done
 - `Source/LICENSE` added: full GPLv3 text with a header crediting
@@ -110,13 +113,19 @@ Longer-term options:
   C on crank state/rotation. Current first pass uses a crank angle hold zone.
 - **In-app remappable controls** (see 2d). Best long-term answer.
 
-### 2b. Pause on Playdate system menu
-When the user presses the Menu button to open the system menu, the
-update callback keeps firing and emulation keeps running. Audio also
-keeps playing. Should pause cleanly:
-- Use `kEventPause` / `kEventResume` events in `eventHandler` to stop
-  emulating and silence the audio source while paused.
-- Same for `kEventLowPower` (charger unplugged near zero battery).
+### 2b. Pause on Playdate system menu — done
+The Playdate runtime stops calling `update()` when the system menu is
+open (emulation naturally freezes). Two additions wired up in
+`eventHandler`:
+- `kEventPause`: sets `emu_paused = 1` and releases every held PM key
+  (`MINX_KEY_A` through `MINX_KEY_SHOCK`) so no button stays stuck on
+  resume.
+- `kEventResume`: clears `emu_paused = 0`.
+- `audio_callback` checks `emu_paused` alongside `app_mode` and emits
+  silence while the menu is up.
+
+`kEventLowPower` (charger unplugged near zero battery) is not yet
+handled — low priority since the OS manages the shutdown sequence.
 
 ### 2c. Accelerometer-based shake — done
 Shake is now driven by `pd->system->getAccelerometer`: squared-
@@ -170,10 +179,10 @@ be told *why* they're seeing the demo ROM and how to load real games:
   toast or About-screen entry. Don't be intrusive; the demo is playable.
 - Don't crash on a bad ROM in that directory either — see 3d.
 
-### 3c. Background/foreground audio handling
-Audio source created in `eventHandler`'s `kEventInit` should be torn
-down on `kEventTerminate`. On `kEventPause` mute it; on `kEventResume`
-re-enable. Otherwise audio buffer underrun could happen on resume.
+### 3c. Background/foreground audio handling — done
+- Audio source torn down on `kEventTerminate` (was already in place).
+- `kEventPause` / `kEventResume` now mute and unmute via the
+  `emu_paused` flag checked inside `audio_callback` (see §2b).
 
 ### 3d. Error recovery
 - Corrupt ROM (size 0, bad magic): show error, return to picker.
@@ -245,10 +254,12 @@ pointer. Could remove the SetVideo call entirely and shave a few KB.
   IR. Cannot emulate.
 - **Color PRC mode** — `LCDMODE_COLORS` is a homebrew-only PM extension.
   No commercial PM games use it; no point on a 1-bit panel anyway.
-- **Closing the heavy-scene 7% emulation deficit** — covered in NOTES.md.
-  Not a ship blocker (most players won't notice; the games that hit it
-  worst are the most demanding ones, where slight slowdown is plausible
-  even on real hardware).
+- **Closing the heavy-scene emulation deficit** — heavy-scene ceiling
+  is ~14% below native on the heaviest ROMs (Togepi), covered in
+  NOTES.md. Not a ship blocker (most players won't notice; the games
+  that hit it worst are the most demanding ones, where slight slowdown
+  is plausible even on real hardware). Smooth+3.5x is within ~2 fps of
+  fast+3x after the memory-bandwidth render pass (also in NOTES.md).
 
 ## Suggested order
 
@@ -259,7 +270,7 @@ A reasonable shipping path:
 3. ~~**1d (LICENSE), 4b**~~ — LICENSE bundled, README done. ✅
 4. ~~**2c**~~ — accelerometer-based shake (crank now free). ✅
 5. **1b** — EEPROM persistence (a few hours, biggest player-facing win)
-6. **2b, 3c** — pause/resume handling (an hour each)
+6. ~~**2b, 3c**~~ — pause/resume handling. ✅
 7. **3a, 3b** — per-ROM data isolation + empty-state hint (half day)
 8. **2d** — remaining settings menu wiring (audio/reset/save-state items;
    LCD mode and ROM picker are already wired; C has a crank first pass)
