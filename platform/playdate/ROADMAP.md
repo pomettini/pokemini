@@ -195,13 +195,12 @@ frame = ~33ms = 2.4 PM frames late). If users complain, time-stamp the
 button events and replay them at the right PM frame inside the
 fractional-pacing loop.
 
-### 3g. Full-screen scaling experiment
-Very low priority: investigate a fuller-screen presentation, roughly 2.5x
-logical scaling from the 96x64 Pokemon Mini framebuffer toward the Playdate
-screen. This cannot be a clean integer scale like the current 3x renderer, so
-expect uneven pixels, extra resampling cost, or a custom row/column pattern.
-Only pursue if the current centered 3x view feels too small after the core
-features are done.
+### 3g. 3.5x scaling experiment — first pass done
+The Playdate system menu now has `Scale: 3x/3.5x`. `3x` is the stable baseline
+integer scale at 288x192. `3.5x` expands the 96x64 Pokemon Mini framebuffer to
+336x224 with an alternating 3/4-pixel row/column pattern, centered on screen. This is
+still an experiment: inspect readability, shimmer, and performance on device
+before treating it as final.
 
 ## 4. Code/build hygiene
 
@@ -268,6 +267,6 @@ A reasonable shipping path:
    (half day)
 10. **1d (Credits)**, **3d, 3e, 3f** — in-app credits + polish pass
     (as time allows)
-11. **3g** — full-screen / 2.5x-ish scaling investigation (very low priority)
+11. **3g** — review 3.5x scale readability/performance (very low priority)
 
 That's roughly 1-2 days of focused work to a v1.0 release from here.

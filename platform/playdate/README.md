@@ -36,6 +36,8 @@ Undock the crank and rotate it into the 60°-180° zone to hold Pokémon Mini's
 - **ROM Picker** returns to the ROM list.
 - **LCD Mode**: `Soft` is the default smoothed display mode; `Fast` uses
   raw 2-shade LCD output for performance testing.
+- **Scale**: `3x` is the default stable integer-scale view; `3.5x` is
+  available as a larger experimental view.
 
 ## Known limitations
 

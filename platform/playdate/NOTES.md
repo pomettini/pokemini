@@ -113,12 +113,11 @@ the emulator is working: `PC` advancing into game ROM, `Disp=1`, `PRC=2`,
 `on=979` (979 pixels lit in `LCDPixelsD`).
 
 **Root cause**: a previous optimization pass added a 256-entry lookup table
-(`expand_lut[256][3]`) that maps each 8-pixel PM byte to 3 expanded Playdate
-framebuffer bytes (3× horizontal scale). The init function `init_expand_lut()`
-is correctly written but never called from `eventHandler`. Since the table
-sits in BSS, every entry is `{0, 0, 0}` — so every framebuffer byte we write
-is 0, regardless of the source pixels. 0 in the Playdate 1-bit framebuffer
-means "black".
+for expanded Playdate framebuffer bytes. The init function `init_expand_lut()`
+was correctly written but never called from `eventHandler`. Since the table sat
+in BSS, every entry was `{0, 0, 0}` — so every framebuffer byte we wrote was 0,
+regardless of the source pixels. 0 in the Playdate 1-bit framebuffer means
+"black".
 
 **Fix**: call `init_expand_lut()` once in `kEventInit` before the first
 `render_screen()`.
@@ -1330,6 +1329,20 @@ button.
 
 Earlier A+B chord and pure dock/undock attempts were removed because they were
 not suitable for repeated Pinball testing.
+
+## Screen Scaling (2026-05-10)
+
+The Playdate system menu exposes `Scale: 3x/3.5x`. `3x` is the default stable
+integer-scale view: the 96x64 Pokemon Mini framebuffer becomes 288x192,
+centered at (56, 24). `3.5x` is available as a larger experimental view:
+336x224 centered at (32, 8), using an alternating 3/4-pixel expansion pattern
+in both axes. Changing scale clears the full framebuffer before the next dirty
+screen render so stale border pixels do not remain.
+
+The 3x renderer intentionally keeps the older direct expansion path so the
+default scale remains comparable to earlier performance baselines. The 3.5x
+renderer uses the row-buffer expansion path because its alternating 3/4-pixel
+pattern is less regular.
 
 ## LCD shading / dither suppression (2026-05-03)
 

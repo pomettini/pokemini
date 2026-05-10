@@ -151,12 +151,23 @@ int UIItems_PlatformC(int index, int reason)
 
 // Playdate: 400x240 1-bit monochrome display
 // Pokemon Mini native screen: 96x64 pixels
-// Integer 3x scale -> 288x192, centered at (56, 24) on the Playdate screen
 #define PM_W     96
 #define PM_H     64
-#define PM_SCALE 3
-#define SCREEN_X ((LCD_COLUMNS - PM_W * PM_SCALE) / 2)   // 56
-#define SCREEN_Y ((LCD_ROWS    - PM_H * PM_SCALE) / 2)   // 24
+
+#define SCALE_3X_W  (PM_W * 3)
+#define SCALE_3X_H  (PM_H * 3)
+#define SCALE_3X_X  ((LCD_COLUMNS - SCALE_3X_W) / 2)  // 56
+#define SCALE_3X_Y  ((LCD_ROWS    - SCALE_3X_H) / 2)  // 24
+
+#define SCALE_35X_W  336
+#define SCALE_35X_H  224
+#define SCALE_35X_X  ((LCD_COLUMNS - SCALE_35X_W) / 2)  // 32
+#define SCALE_35X_Y  ((LCD_ROWS    - SCALE_35X_H) / 2)  // 8
+
+enum {
+	RENDER_SCALE_3X,
+	RENDER_SCALE_35X,
+};
 
 // ROM buffer allocated via Playdate file API (fopen is unsupported on device)
 static uint8_t *rom_buf = NULL;
@@ -167,6 +178,9 @@ static SoundSource *audio_source = NULL;
 // System menu item for LCD quality/performance switching.
 static PDMenuItem *lcd_mode_menu_item = NULL;
 static const char *lcd_mode_options[] = { "Soft", "Fast" };
+static PDMenuItem *screen_scale_menu_item = NULL;
+static const char *screen_scale_options[] = { "3x", "3.5x" };
+static int screen_scale_mode = RENDER_SCALE_3X;
 
 // C is held while the crank sits in this undocked angle zone. This avoids
 // using the dock/undock mechanism itself as a gameplay button.
@@ -205,8 +219,10 @@ static int PD_KeysMapping[] = {
 static int audio_callback(void *context, int16_t *left, int16_t *right, int len)
 {
 	(void)context;
-	(void)right;
+	if (len <= 0) return 0;
+
 	MinxAudio_GenerateEmulatedS16(left, len, 1);
+	if (right) memcpy(right, left, (size_t)len * sizeof(*left));
 	return 1;
 }
 
@@ -313,64 +329,112 @@ static void handle_input(void)
 	}
 }
 
-// 8 PM pixels (1 bit each, MSB = leftmost) expand to 24 Playdate framebuffer
-// bits at 3x horizontal scale.  Precomputed once at startup so each PM byte
-// becomes 3 byte stores instead of 24 read-modify-writes.
-static uint8_t expand_lut[256][3];
+// 8 PM pixels (1 bit each, MSB = leftmost) expand to 24 Playdate
+// framebuffer bits. Precomputed once at startup so each PM byte becomes
+// direct byte stores instead of per-pixel read-modify-writes.
+static uint8_t expand_lut_3x[256][3];
 
 static void init_expand_lut(void)
 {
 	for (int i = 0; i < 256; i++) {
-		uint32_t bits = 0;
+		uint32_t bits3 = 0;
 		for (int b = 0; b < 8; b++) {
 			if ((i >> (7 - b)) & 1) {
-				// Set 3 consecutive bits at the matching position in the 24-bit
-				// output (MSB-first to match Playdate framebuffer layout).
-				bits |= (uint32_t)0x7 << (24 - 3 - b * 3);
+				// MSB-first to match Playdate framebuffer layout.
+				bits3 |= (uint32_t)0x7 << (24 - 3 - b * 3);
 			}
 		}
-		expand_lut[i][0] = (uint8_t)(bits >> 16);
-		expand_lut[i][1] = (uint8_t)(bits >> 8);
-		expand_lut[i][2] = (uint8_t)(bits);
+		expand_lut_3x[i][0] = (uint8_t)(bits3 >> 16);
+		expand_lut_3x[i][1] = (uint8_t)(bits3 >> 8);
+		expand_lut_3x[i][2] = (uint8_t)(bits3);
 	}
 }
 
-// Blit the PM 96x64 frame into the Playdate 400x240 1-bit framebuffer at 3x
-// integer scale, centered at (SCREEN_X, SCREEN_Y).  SCREEN_X (56) is byte-
-// aligned (56 = 7*8), so each row writes 36 bytes starting at fb + row*RS + 7.
+static void expand_pair_35x(uint8_t b0, uint8_t b1, uint8_t *dst)
+{
+	uint64_t out = 0;
+	uint16_t src = (uint16_t)((b0 << 8) | b1);
+
+	for (int i = 0; i < 16; i++) {
+		int width = (i & 1) ? 4 : 3;
+		out <<= width;
+		if (src & (0x8000u >> i))
+			out |= (uint64_t)((1u << width) - 1u);
+	}
+
+	dst[0] = (uint8_t)(out >> 48);
+	dst[1] = (uint8_t)(out >> 40);
+	dst[2] = (uint8_t)(out >> 32);
+	dst[3] = (uint8_t)(out >> 24);
+	dst[4] = (uint8_t)(out >> 16);
+	dst[5] = (uint8_t)(out >> 8);
+	dst[6] = (uint8_t)out;
+}
+
 // 0 in LCDPixelsD/A = pixel off = light = white = bit set on Playdate.
 //
 // PM games fake gray shades by toggling pixels every native frame (72 Hz).
 // On a 1-bit panel that's just visible flicker. To suppress it we run the
 // emulator in LCDMODE_ANALOG: MinxLCD_DecayRefresh keeps a 4-frame history
-// per pixel and writes a smoothed brightness value (0..255) into LCDPixelsA,
-// interpolated between MinxLCD.Pixel0Intensity and Pixel1Intensity.
-//
-// Thresholds split that into three buckets per pixel:
-//   - >= t_on  (~3 frames lit)  -> solid on
-//   - <  t_off (~1 frame  lit)  -> solid off
-//   - between                   -> checkerboard dither
-// The 4-frame history makes moving "gray" sprites fade in/out smoothly
-// instead of dithering on both edges as they slide.
-static void render_screen(void)
+// per pixel and writes a smoothed brightness value (0..255) into LCDPixelsA.
+static void build_pm_row_bits(int y, uint8_t row[PM_W / 8])
 {
-	if (!LCDDirty) return;
-	LCDDirty = 0;
+	const int pm_bytes = PM_W / 8;
 
-	uint8_t *fb = pd->graphics->getFrame();
-	const int byte_x = SCREEN_X / 8;  // 7
-	const int pm_bytes = PM_W / 8;    // 12
+	if (CommandLine.lcdmode == LCDMODE_2SHADES) {
+		const uint8_t *srcD = &LCDPixelsD[y * PM_W];
+		for (int bx = 0; bx < pm_bytes; bx++) {
+			row[bx] =
+				((srcD[0] == 0) << 7) | ((srcD[1] == 0) << 6) |
+				((srcD[2] == 0) << 5) | ((srcD[3] == 0) << 4) |
+				((srcD[4] == 0) << 3) | ((srcD[5] == 0) << 2) |
+				((srcD[6] == 0) << 1) | ((srcD[7] == 0)     );
+			srcD += 8;
+		}
+		return;
+	}
+
+	// Thresholds adapt to the game's current contrast setting (Pixel0/Pixel1
+	// intensities change with MinxLCD.Contrast). Boundaries at level 1.5 and
+	// level 2.5 of the 5-level interpolation: 3/8 and 5/8 of the span.
+	const int p0 = MinxLCD.Pixel0Intensity;
+	const int p1 = MinxLCD.Pixel1Intensity;
+	const int span = p1 - p0;
+	const uint8_t t_off = (uint8_t)(p0 + (3 * span) / 8);
+	const uint8_t t_on  = (uint8_t)(p0 + (5 * span) / 8);
+	const uint8_t dither = (y & 1) ? 0xAA : 0x55;
+	const uint8_t *srcA = &LCDPixelsA[y * PM_W];
+
+	for (int bx = 0; bx < pm_bytes; bx++) {
+		uint8_t high =
+			((srcA[0] >= t_on) << 7) | ((srcA[1] >= t_on) << 6) |
+			((srcA[2] >= t_on) << 5) | ((srcA[3] >= t_on) << 4) |
+			((srcA[4] >= t_on) << 3) | ((srcA[5] >= t_on) << 2) |
+			((srcA[6] >= t_on) << 1) | ((srcA[7] >= t_on)     );
+		uint8_t mid =
+			((srcA[0] >= t_off) << 7) | ((srcA[1] >= t_off) << 6) |
+			((srcA[2] >= t_off) << 5) | ((srcA[3] >= t_off) << 4) |
+			((srcA[4] >= t_off) << 3) | ((srcA[5] >= t_off) << 2) |
+			((srcA[6] >= t_off) << 1) | ((srcA[7] >= t_off)     );
+		srcA += 8;
+
+		row[bx] = (uint8_t)~(high | (mid & dither));
+	}
+}
+
+static void render_screen_3x(uint8_t *fb)
+{
+	const int byte_x = SCALE_3X_X / 8;
+	const int pm_bytes = PM_W / 8;
 
 	if (CommandLine.lcdmode == LCDMODE_2SHADES) {
 		for (int y = 0; y < PM_H; y++) {
 			const uint8_t *srcD = &LCDPixelsD[y * PM_W];
-			uint8_t *dst0 = fb + (SCREEN_Y + y * PM_SCALE)     * LCD_ROWSIZE + byte_x;
+			uint8_t *dst0 = fb + (SCALE_3X_Y + y * 3) * LCD_ROWSIZE + byte_x;
 			uint8_t *dst1 = dst0 + LCD_ROWSIZE;
 			uint8_t *dst2 = dst1 + LCD_ROWSIZE;
 
 			for (int bx = 0; bx < pm_bytes; bx++) {
-				// Fast LCD mode: use the current digital PM frame directly.
-				// Playdate bit set = white/off, while LCDPixelsD non-zero = lit/on.
 				uint8_t b =
 					((srcD[0] == 0) << 7) | ((srcD[1] == 0) << 6) |
 					((srcD[2] == 0) << 5) | ((srcD[3] == 0) << 4) |
@@ -378,7 +442,7 @@ static void render_screen(void)
 					((srcD[6] == 0) << 1) | ((srcD[7] == 0)     );
 				srcD += 8;
 
-				const uint8_t *e = expand_lut[b];
+				const uint8_t *e = expand_lut_3x[b];
 				dst0[0] = e[0]; dst0[1] = e[1]; dst0[2] = e[2];
 				dst1[0] = e[0]; dst1[1] = e[1]; dst1[2] = e[2];
 				dst2[0] = e[0]; dst2[1] = e[1]; dst2[2] = e[2];
@@ -386,7 +450,7 @@ static void render_screen(void)
 			}
 		}
 
-		pd->graphics->markUpdatedRows(SCREEN_Y, SCREEN_Y + PM_H * PM_SCALE - 1);
+		pd->graphics->markUpdatedRows(SCALE_3X_Y, SCALE_3X_Y + SCALE_3X_H - 1);
 		return;
 	}
 
@@ -401,20 +465,17 @@ static void render_screen(void)
 
 	for (int y = 0; y < PM_H; y++) {
 		const uint8_t *srcA = &LCDPixelsA[y * PM_W];
-		uint8_t *dst0 = fb + (SCREEN_Y + y * PM_SCALE)     * LCD_ROWSIZE + byte_x;
+		uint8_t *dst0 = fb + (SCALE_3X_Y + y * 3) * LCD_ROWSIZE + byte_x;
 		uint8_t *dst1 = dst0 + LCD_ROWSIZE;
 		uint8_t *dst2 = dst1 + LCD_ROWSIZE;
-
 		const uint8_t dither = (y & 1) ? 0xAA : 0x55;
 
 		for (int bx = 0; bx < pm_bytes; bx++) {
-			// "high" byte: pixels brighter than the on threshold (always on).
 			uint8_t high =
 				((srcA[0] >= t_on) << 7) | ((srcA[1] >= t_on) << 6) |
 				((srcA[2] >= t_on) << 5) | ((srcA[3] >= t_on) << 4) |
 				((srcA[4] >= t_on) << 3) | ((srcA[5] >= t_on) << 2) |
 				((srcA[6] >= t_on) << 1) | ((srcA[7] >= t_on)     );
-			// "mid" byte: pixels brighter than the off threshold (dither candidates).
 			uint8_t mid =
 				((srcA[0] >= t_off) << 7) | ((srcA[1] >= t_off) << 6) |
 				((srcA[2] >= t_off) << 5) | ((srcA[3] >= t_off) << 4) |
@@ -422,12 +483,8 @@ static void render_screen(void)
 				((srcA[6] >= t_off) << 1) | ((srcA[7] >= t_off)     );
 			srcA += 8;
 
-			// On = always-on pixels, plus mid pixels gated by dither.
-			// Invert to get "off" mask (Playdate: bit set = white = pixel off).
-			uint8_t b = (uint8_t)~(high | (mid & dither));
-
-			// Expand to 3 Playdate bytes, replicate across 3 vertical-scale rows.
-			const uint8_t *e = expand_lut[b];
+			const uint8_t b = (uint8_t)~(high | (mid & dither));
+			const uint8_t *e = expand_lut_3x[b];
 			dst0[0] = e[0]; dst0[1] = e[1]; dst0[2] = e[2];
 			dst1[0] = e[0]; dst1[1] = e[1]; dst1[2] = e[2];
 			dst2[0] = e[0]; dst2[1] = e[1]; dst2[2] = e[2];
@@ -435,7 +492,45 @@ static void render_screen(void)
 		}
 	}
 
-	pd->graphics->markUpdatedRows(SCREEN_Y, SCREEN_Y + PM_H * PM_SCALE - 1);
+	pd->graphics->markUpdatedRows(SCALE_3X_Y, SCALE_3X_Y + SCALE_3X_H - 1);
+}
+
+static void render_screen_35x(uint8_t *fb)
+{
+	const int byte_x = SCALE_35X_X / 8;
+	const int pm_bytes = PM_W / 8;
+	uint8_t row[PM_W / 8];
+	uint8_t scaled_row[SCALE_35X_W / 8];
+	int dst_y = SCALE_35X_Y;
+
+	for (int y = 0; y < PM_H; y++) {
+		build_pm_row_bits(y, row);
+		for (int pair = 0; pair < pm_bytes / 2; pair++) {
+			expand_pair_35x(row[pair * 2], row[pair * 2 + 1],
+			                &scaled_row[pair * 7]);
+		}
+
+		const int repeats = (y & 1) ? 4 : 3;
+		for (int r = 0; r < repeats; r++) {
+			uint8_t *dst = fb + (dst_y + r) * LCD_ROWSIZE + byte_x;
+			memcpy(dst, scaled_row, sizeof(scaled_row));
+		}
+		dst_y += repeats;
+	}
+
+	pd->graphics->markUpdatedRows(SCALE_35X_Y, SCALE_35X_Y + SCALE_35X_H - 1);
+}
+
+static void render_screen(void)
+{
+	if (!LCDDirty) return;
+	LCDDirty = 0;
+
+	uint8_t *fb = pd->graphics->getFrame();
+	if (screen_scale_mode == RENDER_SCALE_3X)
+		render_screen_3x(fb);
+	else
+		render_screen_35x(fb);
 }
 
 // --- ROM picker -----------------------------------------------------------
@@ -590,6 +685,7 @@ static void start_emulation_with_rom(const char *path)
 
 	PokeMini_Reset(0);
 	PokeMini_ApplyChanges();
+	MinxAudio_ChangeEngine(CommandLine.sound);
 #ifdef PD_OPCODE_DIAG
 	MinxCPU_OpcodeDiagReset();
 #endif
@@ -632,6 +728,22 @@ static void menu_item_lcd_mode_cb(void *userdata)
 
 	CommandLine.lcdmode = new_mode;
 	PokeMini_ApplyChanges();
+	LCDDirty = MINX_DIRTYSCR;
+}
+
+static void menu_item_screen_scale_cb(void *userdata)
+{
+	(void)userdata;
+	if (!screen_scale_menu_item) return;
+
+	int new_scale = pd->system->getMenuItemValue(screen_scale_menu_item)
+		? RENDER_SCALE_35X : RENDER_SCALE_3X;
+	if (screen_scale_mode == new_scale) return;
+
+	screen_scale_mode = new_scale;
+	uint8_t *fb = pd->graphics->getFrame();
+	memset(fb, 0x00, (size_t)(LCD_ROWSIZE * LCD_ROWS));
+	pd->graphics->markUpdatedRows(0, LCD_ROWS - 1);
 	LCDDirty = MINX_DIRTYSCR;
 }
 
@@ -825,7 +937,11 @@ int eventHandler(PlaydateAPI *playdate, PDSystemEvent event, uint32_t arg)
 		// Start the audio source up front so we don't have to thread it
 		// through the picker -> emulator transition. While the picker is
 		// up MinxAudio's state is idle so the source emits silence.
-		audio_source = pd->sound->addSource(audio_callback, NULL, 0);
+		audio_source = pd->sound->addSource(audio_callback, NULL, 1);
+		if (audio_source)
+			pd->sound->source->setVolume(audio_source, 1.0f, 1.0f);
+		else
+			pd->system->logToConsole("%s: audio source creation failed", AppName);
 
 		// System menu item: lets the player return to the ROM picker without
 		// quitting the app. Persists for the lifetime of the process.
@@ -836,6 +952,12 @@ int eventHandler(PlaydateAPI *playdate, PDSystemEvent event, uint32_t arg)
 			// Soft is the default: analog decay suppresses Pokemon Mini LCD
 			// flicker. Fast is available for performance measurements.
 			pd->system->setMenuItemValue(lcd_mode_menu_item, 0);
+		}
+		screen_scale_menu_item = pd->system->addOptionsMenuItem(
+			"Scale", screen_scale_options, 2, menu_item_screen_scale_cb, NULL);
+		if (screen_scale_menu_item) {
+			// 3x is the default stable integer-scale mode.
+			pd->system->setMenuItemValue(screen_scale_menu_item, 0);
 		}
 
 		// Scan /Shared/Emulation/pm/games/ for *.min ROMs.
