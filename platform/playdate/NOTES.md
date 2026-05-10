@@ -312,22 +312,30 @@ Investigated and ruled out — don't waste time re-investigating:
   rewriting MinxLCD's per-pixel writes to RMW-pack bits, which is
   invasive and probably slower on Cortex-M7 (RMW vs byte store).
 
-### Where the remaining 7% deficit lived (commercial English ROMs)
+### Where the remaining 7% deficit lived
 
 Heavy-scene saturation on the original baseline was 100% emulator-core-
 bound. The "Dispatcher locality pass" below pushed light scenes to
 100% real PM and brought the typical heavy-scene number from 93% to
 near full speed too. The remaining unaddressed perf gap is on **heavy
-Japanese ROMs** (Togepi JP), discussed at the end of that section.
+ROMs** — Togepi was the canonical example, with no measurable
+difference between the Japanese ROM and its English fan
+translation (see correction in the next section).
 
 ## Dispatcher locality pass (2026-05-09)
 
 ### Trigger
 
-User reported Japanese Togepi running noticeably slow vs. the
-prior-baseline English Togepi. Per-second phase timing showed the
-core was saturated at ~990 ms/sec emu but only emulating 41 PM
-frames/sec (real PM = 72), at ~17 fps display. Inner-loop split
+User reported Togepi running noticeably slow. Per-second phase
+timing showed the core was saturated at ~990 ms/sec emu but only
+emulating 41 PM frames/sec (real PM = 72), at ~17 fps display.
+
+(Originally framed as a Japanese-vs-English-Togepi gap based on
+casual play feel. A 2026-05-10 measurement of the English fan
+translation [`Togepi's Great Adventure (Japan) [T-En by Mr. Blinky &
+Snesy v1.0] [n].min`] showed essentially the same fps profile as
+the Japanese ROM — the deficit is workload-driven, not language-
+driven. The cause and fix below are unchanged.) Inner-loop split
 (temporary `PD_PERF_DIAG` instrumentation in `Hardware.c` and
 `update()`) attributed the cost as:
 
@@ -391,7 +399,10 @@ Heavy Japanese Togepi:
 | % real PM speed | 58% | **81%** |
 
 A 30% reduction in per-PM-frame cost; some windows hit ~93% real PM.
-Light scenes and English ROMs were already at 100% — they stay there.
+Light scenes were already at 100% — they stay there. (Earlier drafts
+said "and English ROMs"; that was speculation, since corrected — the
+English fan-translated Togepi runs at ~the same fps as the Japanese
+version. Heavy is heavy regardless of language.)
 
 ### Why this beat the LTO loss
 
@@ -825,8 +836,9 @@ With every Playdate-friendly lever exercised (section
 consolidation, 4 KB alignment of `MinxCPU_Exec`, `-Os` over `-O3`,
 `-falign-loops=32`, custom linker script, perf-keepalive, the
 single-opcode `MinxCPU_Exec`), the production ceiling on heavy
-Japanese ROMs is **~86% real PM speed** (light scenes and English
-ROMs at 100%). This is where things stay until either:
+ROMs (Togepi, JP or English fan-translation) is **~86% real PM
+speed**, with light scenes at 100%. This is where things stay until
+either:
 - A computed-goto rewrite of the *entire* dispatch chain (with
   per-opcode handlers chaining directly via `goto *`, eliminating
   the central switch entirely) is attempted — much bigger refactor
@@ -1483,10 +1495,14 @@ Cumulative wins delivered, in order:
    format-rich log) — empirically required.
 7. Crank-as-C, 3x/3.5x scaling, LCD Soft/Fast toggle — UX, not perf.
 
-Heavy Japanese Togepi ends up at ~25.9 fps display avg, ~27.2-27.8
-fps in steady stretches, with periodic stalls into the high teens
-during game-driven busy-waits. Light scenes and English/commercial
-ROMs hit native PM speed.
+Heavy Togepi ends up at ~25.9 fps display avg, ~27.2-27.8 fps in
+steady stretches, with periodic stalls into the high teens during
+game-driven busy-waits. The English fan-translation of Togepi
+(measured 2026-05-10) lands in the same band — typical ~23-24 fps
+steady, peaks ~25 — i.e. no meaningful difference vs. JP either
+way (earlier drafts of these notes claimed English was faster; that
+was unmeasured speculation, now retracted). Light scenes on either
+hit native PM speed.
 
 What does NOT work and should not be retried:
 

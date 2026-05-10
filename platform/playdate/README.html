@@ -13,7 +13,8 @@
 <p>A port of JustBurn's <a href="https://sourceforge.net/projects/pokemini/">PokéMini emulator</a>
 to the Panic&reg; <a href="https://play.date/">Playdate&reg;</a>. Plays
 <a href="https://en.wikipedia.org/wiki/Pok%C3%A9mon_Mini">Pokémon&reg; Mini</a>
-cartridges (and homebrew) on Playdate at full speed in regular play.</p>
+cartridges (and homebrew). Most games run at full speed, a few
+graphics-heavy titles run slightly under native speed.</p>
 
 <p><strong>ROMs are not included.</strong> The bundle ships with FreeBIOS only.</p>
 
@@ -40,28 +41,32 @@ cartridges (and homebrew) on Playdate at full speed in regular play.</p>
     <tr><td>D-pad</td><td>D-pad</td></tr>
     <tr><td>A</td><td>A</td></tr>
     <tr><td>B</td><td>B</td></tr>
+    <tr><td>Crank, in 60°-180°</td><td>C</td></tr>
     <tr><td>Shake the device</td><td>Shake</td></tr>
   </tbody>
 </table>
 
-<p>Pokémon Mini's <strong>C</strong> button isn't mapped yet.</p>
+<h2>Options (found in Playdate system menu)</h2>
+
+<ul>
+  <li><strong>LCD Mode</strong>: <code>Soft</code> (default, smoothed) or <code>Fast</code> (raw 2-shade).</li>
+  <li><strong>Scale</strong>: <code>3x</code> (default) or <code>3.5x</code>.</li>
+</ul>
 
 <h2>Known limitations</h2>
 
 <ul>
   <li>No EEPROM save on device.</li>
   <li>No save-state UI yet.</li>
-  <li>C button unmapped.</li>
-  <li>Heavy sprite scenes run ~7% slow.</li>
 </ul>
 
 <h2>Credits</h2>
 
 <ul>
-  <li><strong>PokéMini core</strong> &mdash; <a href="https://sourceforge.net/projects/pokemini/">JustBurn</a> (2009&ndash;2015).</li>
-  <li><strong>Playdate port</strong> &mdash; <a href="https://www.giorgiopomettini.eu/">Giorgio Pomettini</a>.</li>
-  <li><strong>Graphics assets</strong> &mdash; <a href="https://noemifrulio.itch.io/">Noemi Frulio</a>.</li>
-  <li><strong>FreeBIOS</strong> &mdash; Team Pokeme (2009), freeware.</li>
+  <li><strong>PokéMini core</strong>: <a href="https://sourceforge.net/projects/pokemini/">JustBurn</a> (2009&ndash;2015).</li>
+  <li><strong>Playdate port</strong>: <a href="https://www.giorgiopomettini.eu/">Giorgio Pomettini</a>.</li>
+  <li><strong>Graphics assets</strong>: <a href="https://noemifrulio.itch.io/">Noemi Frulio</a>.</li>
+  <li><strong>FreeBIOS</strong>: Team Pokeme (2009), freeware.</li>
 </ul>
 
 <p>Source code, roadmap and dev notes:
@@ -69,7 +74,7 @@ cartridges (and homebrew) on Playdate at full speed in regular play.</p>
 
 <h2>License</h2>
 
-<p><a href="https://www.gnu.org/licenses/gpl-3.0.html">GPLv3</a> &mdash; see <code>LICENSE</code> inside the <code>.pdx</code> bundle.</p>
+<p><a href="https://www.gnu.org/licenses/gpl-3.0.html">GPLv3</a>. See <code>LICENSE</code> inside the <code>.pdx</code> bundle.</p>
 
 <h2>Legal</h2>
 

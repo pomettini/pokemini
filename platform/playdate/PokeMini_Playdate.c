@@ -172,6 +172,12 @@ enum {
 // ROM buffer allocated via Playdate file API (fopen is unsupported on device)
 static uint8_t *rom_buf = NULL;
 
+// App mode is declared here (rather than down by the picker code) because the
+// audio_callback below reads it across threads to silence output while the
+// picker is up. volatile so the audio thread sees writes from the main thread.
+typedef enum { MODE_PICKER, MODE_EMULATOR } AppMode;
+static volatile AppMode app_mode = MODE_PICKER;
+
 // Audio source handle
 static SoundSource *audio_source = NULL;
 
@@ -216,10 +222,21 @@ static int PD_KeysMapping[] = {
 // Playdate audio callback: fill the left channel with generated PM audio samples.
 // MinxAudio_GenerateEmulatedS16 reads only a few emulator state variables and is
 // safe to call from the audio thread when using POKEMINI_GENSOUND.
+//
+// We gate on app_mode: when the picker is up the emulator isn't being stepped,
+// but MinxAudio.Volume and the Tmr3 register state still hold whatever the
+// game last set them to — so without this gate the audio thread would keep
+// emitting the last tone indefinitely after returning to the picker.
 static int audio_callback(void *context, int16_t *left, int16_t *right, int len)
 {
 	(void)context;
 	if (len <= 0) return 0;
+
+	if (app_mode != MODE_EMULATOR) {
+		memset(left, 0, (size_t)len * sizeof(*left));
+		if (right) memset(right, 0, (size_t)len * sizeof(*right));
+		return 1;
+	}
 
 	MinxAudio_GenerateEmulatedS16(left, len, 1);
 	if (right) memcpy(right, left, (size_t)len * sizeof(*left));
@@ -539,8 +556,10 @@ static void render_screen(void)
 // lets the user pick one with D-pad + A. If the directory is empty, falls
 // back to the bundled boot.min. Rough/testing UI, not final.
 
-#define MAX_ROMS 64
-#define MAX_ROM_NAME 64
+#define MAX_ROMS 128
+// 128 covers full English titles and fan-translation names; ROMs that
+// exceeded the previous 64-byte cap were silently dropped from the picker.
+#define MAX_ROM_NAME 128
 
 static const char *ROM_DIR = "/Shared/Emulation/pm/games/";
 
@@ -548,9 +567,6 @@ static char rom_names[MAX_ROMS][MAX_ROM_NAME];
 static int rom_count = 0;
 static int rom_cursor = 0;
 static int rom_view_top = 0;
-
-typedef enum { MODE_PICKER, MODE_EMULATOR } AppMode;
-static AppMode app_mode = MODE_PICKER;
 
 static LCDFont *picker_font = NULL;
 
@@ -571,10 +587,30 @@ static void rom_listfiles_cb(const char *filename, void *ctx)
 {
 	(void)ctx;
 	rom_listfiles_seen++;
-	pd->system->logToConsole("%s:   listfiles entry: '%s'", AppName, filename);
-	if (rom_count >= MAX_ROMS) return;
-	if (!has_min_suffix(filename)) return;
-	if (strlen(filename) >= MAX_ROM_NAME) return;
+	size_t flen = strlen(filename);
+	pd->system->logToConsole("%s:   listfiles entry: '%s' (len=%u)",
+		AppName, filename, (unsigned)flen);
+	if (!has_min_suffix(filename)) {
+		// Log the trailing bytes so invisible chars (whitespace, BOM) show up
+		// as their numeric values rather than disappearing in the console.
+		const unsigned char *t = (const unsigned char *)filename;
+		size_t off = flen >= 6 ? flen - 6 : 0;
+		pd->system->logToConsole(
+			"%s:     dropped: suffix mismatch, last bytes: %02X %02X %02X %02X %02X %02X",
+			AppName,
+			t[off], t[off+1], t[off+2], t[off+3], t[off+4], t[off+5]);
+		return;
+	}
+	if (rom_count >= MAX_ROMS) {
+		pd->system->logToConsole("%s:     dropped: MAX_ROMS=%d reached",
+			AppName, MAX_ROMS);
+		return;
+	}
+	if (flen >= MAX_ROM_NAME) {
+		pd->system->logToConsole("%s:     dropped: name length %u >= MAX_ROM_NAME=%d",
+			AppName, (unsigned)flen, MAX_ROM_NAME);
+		return;
+	}
 	strcpy(rom_names[rom_count], filename);
 	rom_count++;
 }

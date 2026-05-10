@@ -3,7 +3,8 @@
 A port of JustBurn's [PokéMini emulator](https://sourceforge.net/projects/pokemini/)
 to the Panic® [Playdate®](https://play.date/). Plays
 [Pokémon® Mini](https://en.wikipedia.org/wiki/Pok%C3%A9mon_Mini)
-cartridges (and homebrew) on Playdate at full speed in regular play.
+cartridges (and homebrew). Most games run at full speed, a few
+graphics-heavy titles run slightly under native speed.
 
 **ROMs are not included.** The bundle ships with FreeBIOS only.
 
@@ -20,44 +21,37 @@ Return to the picker mid-game from Playdate's system menu.
 
 ## Controls
 
-| Playdate           | Pokémon Mini |
-| ---                | ---          |
-| D-pad              | D-pad        |
-| A                  | A            |
-| B                  | B            |
-| Crank angle zone   | C            |
-| Shake the device   | Shake        |
+| Playdate              | Pokémon Mini |
+| ---                   | ---          |
+| D-pad                 | D-pad        |
+| A                     | A            |
+| B                     | B            |
+| Crank, in 60°-180°    | C            |
+| Shake the device      | Shake        |
 
-Undock the crank and rotate it into the 60°-180° zone to hold Pokémon Mini's
-**C** button. Move it outside that zone, or dock it, to release C.
+## Options (found in Playdate system menu)
 
-## System Menu
-
-- **ROM Picker** returns to the ROM list.
-- **LCD Mode**: `Soft` is the default smoothed display mode; `Fast` uses
-  raw 2-shade LCD output for performance testing.
-- **Scale**: `3x` is the default stable integer-scale view; `3.5x` is
-  available as a larger experimental view.
+- **LCD Mode**: `Soft` (default, smoothed) or `Fast` (raw 2-shade).
+- **Scale**: `3x` (default) or `3.5x`.
 
 ## Known limitations
 
 - No EEPROM save on device.
 - No save-state UI yet.
-- Heavy sprite scenes run ~7% slow.
 
 ## Credits
 
-- **PokéMini core** — [JustBurn](https://sourceforge.net/projects/pokemini/) (2009–2015).
-- **Playdate port** — [Giorgio Pomettini](https://www.giorgiopomettini.eu/).
-- **Graphics assets** — [Noemi Frulio](https://noemifrulio.itch.io/).
-- **FreeBIOS** — Team Pokeme (2009), freeware.
+- **PokéMini core**: [JustBurn](https://sourceforge.net/projects/pokemini/) (2009–2015).
+- **Playdate port**: [Giorgio Pomettini](https://www.giorgiopomettini.eu/).
+- **Graphics assets**: [Noemi Frulio](https://noemifrulio.itch.io/).
+- **FreeBIOS**: Team Pokeme (2009), freeware.
 
 Source code, roadmap and dev notes:
 [github.com/pomettini/pokemini](https://github.com/pomettini/pokemini).
 
 ## License
 
-[GPLv3](https://www.gnu.org/licenses/gpl-3.0.html) — see `LICENSE` inside the `.pdx` bundle.
+[GPLv3](https://www.gnu.org/licenses/gpl-3.0.html). See `LICENSE` inside the `.pdx` bundle.
 
 ## Legal
 
