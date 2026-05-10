@@ -1,5 +1,5 @@
 /*
-  PokeMini - Pok�mon-Mini Emulator
+  PokeMini - Pok�mon-Mini Emulator
   Copyright (C) 2009-2014  JustBurn
 
   This program is free software: you can redistribute it and/or modify
@@ -84,6 +84,11 @@ void MinxLCD_Reset(int hardreset)
 	MinxLCD_SetContrast(0x1F);
 }
 
+#ifndef TARGET_PLAYDATE
+// Forward decl; full definition lives next to BitsActives + MinxLCD_DecayLUT.
+static void MinxLCD_RebuildDecayLUT(void);
+#endif
+
 int MinxLCD_LoadState(FILE *fi, uint32_t bsize)
 {
 	POKELOADSS_START(256*9 + 96*64 + 96*64 + 64);
@@ -107,6 +112,11 @@ int MinxLCD_LoadState(FILE *fi, uint32_t bsize)
 	POKELOADSS_8(MinxLCD.RequireDummyR);
 	POKELOADSS_8(MinxLCD.RMWColumn);
 	POKELOADSS_X(42);
+#ifndef TARGET_PLAYDATE
+	// LoadState writes Pixel0/1Intensity directly, bypassing SetContrast,
+	// so the decay LUT must be rebuilt here too.
+	MinxLCD_RebuildDecayLUT();
+#endif
 	POKELOADSS_END(256*9 + 96*64 + 96*64 + 64);
 	return 1;
 }
@@ -193,6 +203,7 @@ void MinxLCD_DecayRefreshOld(void)
 	}
 }
 
+#ifndef TARGET_PLAYDATE
 static const uint8_t BitsActives[256] = {
 	0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4,
 	1, 2, 2, 3, 2, 3, 3, 4, 2, 3, 3, 4, 3, 4, 4, 5,
@@ -212,24 +223,54 @@ static const uint8_t BitsActives[256] = {
 	4, 5, 5, 6, 5, 6, 6, 7, 5, 6, 6, 7, 6, 7, 7, 8
 };
 
+// Precomputed output of the decay-refresh shade equation, indexed by
+// `sh` (the low-4-bit history nibble built inside MinxLCD_DecayRefresh).
+// Rebuilt in MinxLCD_SetContrast — the only place Pixel0/1Intensity
+// changes. Replaces the per-pixel BitsActives lookup + multiply-add
+// inside the 6144-iteration inner loop run every PM frame.
+//
+// Playdate has its own render-side LUT (pm_sh_to_high/_mid in
+// PokeMini_Playdate.c) and skips the LCDPixelsA store entirely, so this
+// LUT is unused there — gated out to avoid carrying dead state.
+static uint8_t MinxLCD_DecayLUT[16];
+
+static void MinxLCD_RebuildDecayLUT(void)
+{
+	int sh, level;
+	for (sh = 0; sh < 16; sh++) {
+		level = BitsActives[sh];
+		MinxLCD_DecayLUT[sh] = (uint8_t)(
+			(MinxLCD.Pixel0Intensity * (4 - level)
+			 + MinxLCD.Pixel1Intensity * level) >> 2);
+	}
+}
+#endif
+
 void MinxLCD_DecayRefresh(void)
 {
-	int i, level;
+	int i;
 	uint8_t sh;
-	// This is tuned for 5 shades
+	// This is tuned for 5 shades.
+	//
+	// On Playdate the render path samples LCDPixelsAS directly via two
+	// sh-indexed threshold LUTs, so the LCDPixelsA store is dead work — it
+	// costs us a byte store per pixel in a memory-bound loop. Skip it.
+	// Other platforms still need LCDPixelsA materialized.
 	if (MinxLCD.DisplayOn) {
 		for (i=0; i<96*64; i++) {
 			sh = (LCDPixelsD[i] ? 0x08 : 0x00) | (LCDPixelsAS[i] >> 1);
 			LCDPixelsAS[i] = sh;
-			level = BitsActives[sh];
-			LCDPixelsA[i] = (MinxLCD.Pixel0Intensity * (4 - level) + MinxLCD.Pixel1Intensity * level) >> 2;
+#ifndef TARGET_PLAYDATE
+			LCDPixelsA[i] = MinxLCD_DecayLUT[sh];
+#endif
 		}
 	} else {
 		for (i=0; i<96*64; i++) {
 			sh = (LCDPixelsAS[i] >> 1);
 			LCDPixelsAS[i] = sh;
-			level = BitsActives[sh];
-			LCDPixelsA[i] = (MinxLCD.Pixel0Intensity * (4 - level) + MinxLCD.Pixel1Intensity * level) >> 2;
+#ifndef TARGET_PLAYDATE
+			LCDPixelsA[i] = MinxLCD_DecayLUT[sh];
+#endif
 		}
 	}
 }
@@ -605,5 +646,8 @@ void MinxLCD_SetContrast(uint8_t value)
 		MinxLCD.Pixel0Intensity = MinxLCD_ContrastLvl[MinxLCD.Contrast][0];
 		MinxLCD.Pixel1Intensity = MinxLCD_ContrastLvl[MinxLCD.Contrast][1];
 	}
+#ifndef TARGET_PLAYDATE
+	MinxLCD_RebuildDecayLUT();
+#endif
 	LCDDirty = MINX_DIRTYSCR;
 }

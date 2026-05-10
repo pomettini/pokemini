@@ -351,49 +351,108 @@ static void handle_input(void)
 // direct byte stores instead of per-pixel read-modify-writes.
 static uint8_t expand_lut_3x[256][3];
 
+// Same idea for the 3.5x scale. One PM byte (8 src bits) expands to 28
+// dst bits using a 3,4,3,4,3,4,3,4 width pattern per src bit (total
+// 8*(3+4)/2 = 28 bits = "3.5 dst bytes" per src byte). Both halves of an
+// expand_pair_35x call use the same pattern, so a single 256-entry table
+// is enough — packed in the low 28 bits of a uint32_t. ~1 KB rodata.
+static uint32_t expand_lut_35x[256];
+
 static void init_expand_lut(void)
 {
 	for (int i = 0; i < 256; i++) {
 		uint32_t bits3 = 0;
+		uint32_t bits35 = 0;
 		for (int b = 0; b < 8; b++) {
+			int width = (b & 1) ? 4 : 3;
+			bits35 <<= width;
 			if ((i >> (7 - b)) & 1) {
 				// MSB-first to match Playdate framebuffer layout.
 				bits3 |= (uint32_t)0x7 << (24 - 3 - b * 3);
+				bits35 |= (uint32_t)((1u << width) - 1u);
 			}
 		}
 		expand_lut_3x[i][0] = (uint8_t)(bits3 >> 16);
 		expand_lut_3x[i][1] = (uint8_t)(bits3 >> 8);
 		expand_lut_3x[i][2] = (uint8_t)(bits3);
+		expand_lut_35x[i] = bits35;
 	}
 }
 
 static void expand_pair_35x(uint8_t b0, uint8_t b1, uint8_t *dst)
 {
-	uint64_t out = 0;
-	uint16_t src = (uint16_t)((b0 << 8) | b1);
+	// Combine two 28-bit halves into a single 56-bit value:
+	//   bits 55..28 from b0, bits 27..0 from b1.
+	uint32_t e0 = expand_lut_35x[b0];
+	uint32_t e1 = expand_lut_35x[b1];
 
-	for (int i = 0; i < 16; i++) {
-		int width = (i & 1) ? 4 : 3;
-		out <<= width;
-		if (src & (0x8000u >> i))
-			out |= (uint64_t)((1u << width) - 1u);
-	}
-
-	dst[0] = (uint8_t)(out >> 48);
-	dst[1] = (uint8_t)(out >> 40);
-	dst[2] = (uint8_t)(out >> 32);
-	dst[3] = (uint8_t)(out >> 24);
-	dst[4] = (uint8_t)(out >> 16);
-	dst[5] = (uint8_t)(out >> 8);
-	dst[6] = (uint8_t)out;
+	// Unpack to 7 bytes without touching uint64. e0 lives in bits 27..0
+	// of a uint32; in the combined 56-bit output it occupies bits 55..28.
+	//   byte 0: bits 55..48 = e0[27..20]
+	//   byte 1: bits 47..40 = e0[19..12]
+	//   byte 2: bits 39..32 = e0[11..4]
+	//   byte 3: bits 31..24 = e0[3..0] (high nibble) | e1[27..24] (low)
+	//   byte 4: bits 23..16 = e1[23..16]
+	//   byte 5: bits 15..8  = e1[15..8]
+	//   byte 6: bits 7..0   = e1[7..0]
+	dst[0] = (uint8_t)(e0 >> 20);
+	dst[1] = (uint8_t)(e0 >> 12);
+	dst[2] = (uint8_t)(e0 >> 4);
+	dst[3] = (uint8_t)((e0 << 4) | (e1 >> 24));
+	dst[4] = (uint8_t)(e1 >> 16);
+	dst[5] = (uint8_t)(e1 >> 8);
+	dst[6] = (uint8_t)(e1);
 }
 
-// 0 in LCDPixelsD/A = pixel off = light = white = bit set on Playdate.
+// Threshold lookups for the analog render path. MinxLCD_DecayRefresh keeps
+// a 4-bit on/off history per pixel in LCDPixelsAS; the original pipeline
+// then materialized a smoothed brightness byte into LCDPixelsA which the
+// render code thresholded against t_on / t_off. On Playdate, the LCDPixelsA
+// store is dead memory traffic in a memory-bound loop (see DecayRefresh
+// in source/MinxLCD.c). Instead, we precompute "does this sh value clear
+// the high/mid threshold" for the 16 possible sh values once per contrast
+// change, then sample LCDPixelsAS[] directly. Same math, ~25% less memory
+// traffic in DecayRefresh per PM frame.
+static uint8_t pm_sh_to_high[16];
+static uint8_t pm_sh_to_mid[16];
+static int pm_lut_p0_cached = -1;
+static int pm_lut_p1_cached = -1;
+
+static const uint8_t pm_bits_actives_4[16] = {
+	0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4
+};
+
+static void pm_rebuild_threshold_luts(void)
+{
+	const int p0 = MinxLCD.Pixel0Intensity;
+	const int p1 = MinxLCD.Pixel1Intensity;
+	const int span = p1 - p0;
+	const uint8_t t_off = (uint8_t)(p0 + (3 * span) / 8);
+	const uint8_t t_on  = (uint8_t)(p0 + (5 * span) / 8);
+	for (int sh = 0; sh < 16; sh++) {
+		int level = pm_bits_actives_4[sh];
+		int decay = (p0 * (4 - level) + p1 * level) >> 2;
+		pm_sh_to_high[sh] = (decay >= t_on)  ? 1 : 0;
+		pm_sh_to_mid [sh] = (decay >= t_off) ? 1 : 0;
+	}
+	pm_lut_p0_cached = p0;
+	pm_lut_p1_cached = p1;
+}
+
+static inline void pm_ensure_threshold_luts(void)
+{
+	if (MinxLCD.Pixel0Intensity != pm_lut_p0_cached ||
+	    MinxLCD.Pixel1Intensity != pm_lut_p1_cached) {
+		pm_rebuild_threshold_luts();
+	}
+}
+
+// 0 in LCDPixelsD = pixel off = light = white = bit set on Playdate.
 //
 // PM games fake gray shades by toggling pixels every native frame (72 Hz).
 // On a 1-bit panel that's just visible flicker. To suppress it we run the
 // emulator in LCDMODE_ANALOG: MinxLCD_DecayRefresh keeps a 4-frame history
-// per pixel and writes a smoothed brightness value (0..255) into LCDPixelsA.
+// per pixel in LCDPixelsAS, which we threshold via pm_sh_to_high / _mid.
 static void build_pm_row_bits(int y, uint8_t row[PM_W / 8])
 {
 	const int pm_bytes = PM_W / 8;
@@ -411,29 +470,21 @@ static void build_pm_row_bits(int y, uint8_t row[PM_W / 8])
 		return;
 	}
 
-	// Thresholds adapt to the game's current contrast setting (Pixel0/Pixel1
-	// intensities change with MinxLCD.Contrast). Boundaries at level 1.5 and
-	// level 2.5 of the 5-level interpolation: 3/8 and 5/8 of the span.
-	const int p0 = MinxLCD.Pixel0Intensity;
-	const int p1 = MinxLCD.Pixel1Intensity;
-	const int span = p1 - p0;
-	const uint8_t t_off = (uint8_t)(p0 + (3 * span) / 8);
-	const uint8_t t_on  = (uint8_t)(p0 + (5 * span) / 8);
 	const uint8_t dither = (y & 1) ? 0xAA : 0x55;
-	const uint8_t *srcA = &LCDPixelsA[y * PM_W];
+	const uint8_t *srcAS = &LCDPixelsAS[y * PM_W];
 
 	for (int bx = 0; bx < pm_bytes; bx++) {
 		uint8_t high =
-			((srcA[0] >= t_on) << 7) | ((srcA[1] >= t_on) << 6) |
-			((srcA[2] >= t_on) << 5) | ((srcA[3] >= t_on) << 4) |
-			((srcA[4] >= t_on) << 3) | ((srcA[5] >= t_on) << 2) |
-			((srcA[6] >= t_on) << 1) | ((srcA[7] >= t_on)     );
+			(pm_sh_to_high[srcAS[0]] << 7) | (pm_sh_to_high[srcAS[1]] << 6) |
+			(pm_sh_to_high[srcAS[2]] << 5) | (pm_sh_to_high[srcAS[3]] << 4) |
+			(pm_sh_to_high[srcAS[4]] << 3) | (pm_sh_to_high[srcAS[5]] << 2) |
+			(pm_sh_to_high[srcAS[6]] << 1) | (pm_sh_to_high[srcAS[7]]     );
 		uint8_t mid =
-			((srcA[0] >= t_off) << 7) | ((srcA[1] >= t_off) << 6) |
-			((srcA[2] >= t_off) << 5) | ((srcA[3] >= t_off) << 4) |
-			((srcA[4] >= t_off) << 3) | ((srcA[5] >= t_off) << 2) |
-			((srcA[6] >= t_off) << 1) | ((srcA[7] >= t_off)     );
-		srcA += 8;
+			(pm_sh_to_mid[srcAS[0]] << 7) | (pm_sh_to_mid[srcAS[1]] << 6) |
+			(pm_sh_to_mid[srcAS[2]] << 5) | (pm_sh_to_mid[srcAS[3]] << 4) |
+			(pm_sh_to_mid[srcAS[4]] << 3) | (pm_sh_to_mid[srcAS[5]] << 2) |
+			(pm_sh_to_mid[srcAS[6]] << 1) | (pm_sh_to_mid[srcAS[7]]     );
+		srcAS += 8;
 
 		row[bx] = (uint8_t)~(high | (mid & dither));
 	}
@@ -471,17 +522,8 @@ static void render_screen_3x(uint8_t *fb)
 		return;
 	}
 
-	// Thresholds adapt to the game's current contrast setting (Pixel0/Pixel1
-	// intensities change with MinxLCD.Contrast). Boundaries at level 1.5 and
-	// level 2.5 of the 5-level interpolation: 3/8 and 5/8 of the span.
-	const int p0 = MinxLCD.Pixel0Intensity;
-	const int p1 = MinxLCD.Pixel1Intensity;
-	const int span = p1 - p0;
-	const uint8_t t_off = (uint8_t)(p0 + (3 * span) / 8);
-	const uint8_t t_on  = (uint8_t)(p0 + (5 * span) / 8);
-
 	for (int y = 0; y < PM_H; y++) {
-		const uint8_t *srcA = &LCDPixelsA[y * PM_W];
+		const uint8_t *srcAS = &LCDPixelsAS[y * PM_W];
 		uint8_t *dst0 = fb + (SCALE_3X_Y + y * 3) * LCD_ROWSIZE + byte_x;
 		uint8_t *dst1 = dst0 + LCD_ROWSIZE;
 		uint8_t *dst2 = dst1 + LCD_ROWSIZE;
@@ -489,16 +531,16 @@ static void render_screen_3x(uint8_t *fb)
 
 		for (int bx = 0; bx < pm_bytes; bx++) {
 			uint8_t high =
-				((srcA[0] >= t_on) << 7) | ((srcA[1] >= t_on) << 6) |
-				((srcA[2] >= t_on) << 5) | ((srcA[3] >= t_on) << 4) |
-				((srcA[4] >= t_on) << 3) | ((srcA[5] >= t_on) << 2) |
-				((srcA[6] >= t_on) << 1) | ((srcA[7] >= t_on)     );
+				(pm_sh_to_high[srcAS[0]] << 7) | (pm_sh_to_high[srcAS[1]] << 6) |
+				(pm_sh_to_high[srcAS[2]] << 5) | (pm_sh_to_high[srcAS[3]] << 4) |
+				(pm_sh_to_high[srcAS[4]] << 3) | (pm_sh_to_high[srcAS[5]] << 2) |
+				(pm_sh_to_high[srcAS[6]] << 1) | (pm_sh_to_high[srcAS[7]]     );
 			uint8_t mid =
-				((srcA[0] >= t_off) << 7) | ((srcA[1] >= t_off) << 6) |
-				((srcA[2] >= t_off) << 5) | ((srcA[3] >= t_off) << 4) |
-				((srcA[4] >= t_off) << 3) | ((srcA[5] >= t_off) << 2) |
-				((srcA[6] >= t_off) << 1) | ((srcA[7] >= t_off)     );
-			srcA += 8;
+				(pm_sh_to_mid[srcAS[0]] << 7) | (pm_sh_to_mid[srcAS[1]] << 6) |
+				(pm_sh_to_mid[srcAS[2]] << 5) | (pm_sh_to_mid[srcAS[3]] << 4) |
+				(pm_sh_to_mid[srcAS[4]] << 3) | (pm_sh_to_mid[srcAS[5]] << 2) |
+				(pm_sh_to_mid[srcAS[6]] << 1) | (pm_sh_to_mid[srcAS[7]]     );
+			srcAS += 8;
 
 			const uint8_t b = (uint8_t)~(high | (mid & dither));
 			const uint8_t *e = expand_lut_3x[b];
@@ -542,6 +584,11 @@ static void render_screen(void)
 {
 	if (!LCDDirty) return;
 	LCDDirty = 0;
+
+	// Refresh the sh→threshold LUTs if the game adjusted contrast since
+	// last render. Cheap check (two int compares); LUT rebuild itself only
+	// runs on actual contrast change.
+	pm_ensure_threshold_luts();
 
 	uint8_t *fb = pd->graphics->getFrame();
 	if (screen_scale_mode == RENDER_SCALE_3X)

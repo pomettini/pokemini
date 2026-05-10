@@ -1533,6 +1533,160 @@ What probably won't work without firmware/SDK changes:
 - DTCM placement of PM_RAM for fast emulator state (same).
 - Higher CPU clock (firmware-set).
 
+A second-tier ceiling on the *smooth+3.5x* render path was pushed
+later — see "Smooth-mode memory-bandwidth pass" below.
+
+## Smooth-mode memory-bandwidth pass (2026-05-11)
+
+### Trigger
+
+User reported ~10% throughput gap between `LCD Mode: Fast / Scale: 3x`
+and `LCD Mode: Soft / Scale: 3.5x` on heavy Togepi, and asked
+whether the render code could be optimized. Pre-diagnostic guess
+was "render is ~1% of CPU per the 2026-05-03 measurement, can't
+be much" — but that number predated the 3.5x scale and analog
+threshold/dither code, so it was stale.
+
+### Diagnostic
+
+Turned `PD_PERF_DIAG` back on. Per-second phase totals on the same
+Togepi steady-state scene:
+
+| Phase | Fast 3x | Smooth 3.5x | Δ |
+| --- | --- | --- | --- |
+| prc | ~125 ms | ~235 ms | **+110 ms** |
+| render | ~13 ms | ~33 ms | +20 ms |
+| total | ~1,470 ms | ~1,615 ms | +145 ms |
+| fps | ~20.0 | ~18.2 | -10% |
+
+So the slowdown is ~85% emulator-side, ~15% render-side. The prc
+delta is `MinxLCD_DecayRefresh`, called every PM frame in
+`LCDMODE_ANALOG`; the render delta is the analog row builder + the
+3.5x `expand_pair_35x` bit-expansion loop.
+
+### What didn't work: per-pixel ALU reduction
+
+First attempt: replace `BitsActives[sh]` + `(P0*(4-level)+P1*level)>>2`
+inside DecayRefresh with a precomputed `MinxLCD_DecayLUT[sh]`
+(16 bytes, rebuilt in `MinxLCD_SetContrast`). Cleanly removed ~5
+ALU ops per pixel from a 6144-iter inner loop run at 72 Hz.
+
+Result: **0 fps gain**, prc unchanged (235 → 235 ms).
+
+Why: the loop wasn't ALU-bound. Per iteration: 2 byte loads
+(`LCDPixelsD`, `LCDPixelsAS`) + 2 byte stores (`LCDPixelsAS`,
+`LCDPixelsA`). Working set 3×6144 = 18 KB; Cortex-M7 Rev A D-cache
+is 4 KB. The CPU was already waiting on memory; collapsing the ALU
+made no difference. **Cortex-M7 has enough dual-issue / pipelining
+headroom that ALU work overlapped with memory stalls is free.**
+
+The DecayLUT was retained as a small cleanup for non-Playdate
+ports (gated `#ifndef TARGET_PLAYDATE`) — it's a real if tiny win
+on platforms where the bottleneck isn't memory.
+
+### What worked: skip the LCDPixelsA store + threshold off LCDPixelsAS
+
+The actual lever was reducing memory traffic, not compute. Approach:
+
+1. On Playdate, stop materializing the smoothed brightness buffer
+   `LCDPixelsA` inside `MinxLCD_DecayRefresh` (one fewer byte store
+   per pixel, -25% memory ops in the loop).
+2. Render path samples the history nibble `LCDPixelsAS[i]` directly.
+   For each of the 16 possible `sh` values, precompute "does this
+   shade clear t_on / t_off" into two 16-byte LUTs
+   (`pm_sh_to_high`, `pm_sh_to_mid`). Rebuild lazily when
+   `Pixel0/1Intensity` change (cached `p0`/`p1` check, two int
+   compares per `render_screen` call).
+3. Replace `(srcA[i] >= t_on)` / `(srcA[i] >= t_off)` compares in
+   `build_pm_row_bits` and `render_screen_3x` analog paths with
+   `pm_sh_to_high[srcAS[i]]` / `pm_sh_to_mid[srcAS[i]]` lookups.
+
+`LCDPixelsAS` was already allocated (in the second half of
+`LCDPixelsA`'s heap block) but not exported in the header; added
+an `extern` in `MinxLCD.h`.
+
+Result on Togepi smooth+3.5x: prc **235 → 200 ms (-15%)**, render
+33 → 29 ms (-12%, secondary effect from no longer reading
+LCDPixelsA bytes that were in the working set), tim/cpu also
+nudged down a bit (cache-pressure spillover). **Wall fps 18.2 →
+19.2 (+5.5%).** Visual output pixel-identical (LUTs encode the
+same math).
+
+### Bonus: 256-entry LUT for `expand_pair_35x`
+
+The 3.5x scale path called `expand_pair_35x` for every 2-byte PM
+row chunk. The function ran a 16-iter loop with per-bit
+conditionals and variable-width shifts (3 or 4 bits depending on
+position) to produce 7 dst bytes from 16 src bits.
+
+Replaced with a 256-entry `uint32_t` table: each src byte maps to
+its 28-bit expansion (low 28 bits of a uint32; 1 KB rodata). Body
+is then two table reads, four shifts/ORs, seven byte stores. Both
+halves stitched at the byte-3 boundary via
+`((e0 << 4) | (e1 >> 24))`.
+
+Result: render **29 → 17 ms (-41%)**. Translated to wall fps:
+~+0.2 (we're no longer render-bound; render is ~1% of total).
+
+### Cumulative
+
+| Metric | Baseline | After step 1 | After step 1+LUT |
+| --- | --- | --- | --- |
+| prc | ~235 ms | ~200 ms | ~204 ms |
+| render | ~33 ms | ~29 ms | ~17 ms |
+| total | ~1,615 ms | ~1,530 ms | ~1,517 ms |
+| fps | ~18.2 | ~19.2 | ~19.4 |
+
+**+6.6% throughput on heavy Togepi smooth+3.5x.** The smooth/3.5x
+→ fast/3x gap closed from ~10% to ~3%. Fast 3x unchanged (the
+DecayRefresh + analog render path isn't on its critical path).
+
+### Calibration: diag-on numbers were inflated
+
+When `PD_PERF_DIAG` was stripped and the same scene re-measured,
+smooth+3.5x came in at ~23.5-24 fps steady, peaks 25.2. Back-
+computing through the same comparison: pre-patch smooth+3.5x
+without diag was probably ~22.5-23 fps. So the real-world gain
+from option-1 + option-2 is closer to **+0.5-1 fps (~+3-5%)**,
+not the +6.6% the diag-on A/B suggested.
+
+The diag instrumentation itself was costing ~18% of throughput
+(19.4 fps diag-on vs ~23.7 diag-off on the same code) — its
+`getElapsedTime()` calls inside the per-batch Hardware.c loop sat
+right on the hot path. Take that into account when reading any
+absolute fps numbers in this section: the deltas between modes
+are still valid (diag adds the same tax in both), but the
+post-patch ceiling on the final shipped binary is `~23.5-24 fps
+avg / 25.2 peak`, putting smooth+3.5x within ~2 fps of fast+3x.
+
+If you turn diag back on for future investigation, expect the
+fps floor to drop into the high teens again — the diag overhead
+is not a bug, it's the cost of measurement and the only honest
+comparison is mode-vs-mode within the same diag setting.
+
+### Lesson worth remembering
+
+When a perf hypothesis targets ALU reduction, measure the actual
+bottleneck before committing. On M7 + small caches + streaming
+byte buffers, **memory bandwidth is almost always the limit**, and
+collapsing arithmetic in a memory-bound loop is free for the
+hardware (and so for fps). The win comes from reducing total
+memory traffic — fewer loads/stores, smaller working set, or
+better cache locality.
+
+### Files touched
+
+- `source/MinxLCD.h` — export `LCDPixelsAS`.
+- `source/MinxLCD.c` — DecayRefresh: skip LCDPixelsA store under
+  `#ifndef TARGET_PLAYDATE`. DecayLUT/BitsActives also gated
+  there (no consumer on Playdate).
+- `platform/playdate/PokeMini_Playdate.c` — added
+  `pm_sh_to_high`/`pm_sh_to_mid` LUTs + lazy rebuild; added
+  `expand_lut_35x[256]` populated in `init_expand_lut`; rewrote
+  analog branches of `build_pm_row_bits` and `render_screen_3x` to
+  read `LCDPixelsAS` via LUT; replaced `expand_pair_35x` body with
+  table-lookup unpacking.
+
 ## LCD shading / dither suppression (2026-05-03)
 
 PM games fake gray by toggling pixels every native frame (72 Hz). Real

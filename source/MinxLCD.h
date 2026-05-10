@@ -1,5 +1,5 @@
 /*
-  PokeMini - Pokémon-Mini Emulator
+  PokeMini - Pokï¿½mon-Mini Emulator
   Copyright (C) 2009-2015  JustBurn
 
   This program is free software: you can redistribute it and/or modify
@@ -63,6 +63,12 @@ extern uint8_t *LCDPixelsD;
 
 // LCD Pixels Analog (96 x 64, 0 to 255)
 extern uint8_t *LCDPixelsA;
+
+// LCD Pixels Analog Shadow (96 x 64). Holds the 4-bit on/off history per
+// pixel used by MinxLCD_DecayRefresh; sh = (D ? 0x08 : 0) | (AS_prev >> 1).
+// Exposed so Playdate render can sample this directly via a sh-indexed LUT
+// and skip materializing LCDPixelsA (see MinxLCD_DecayRefresh).
+extern uint8_t *LCDPixelsAS;
 
 
 int MinxLCD_Create(void);
