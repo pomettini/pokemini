@@ -36,8 +36,8 @@
 //
 // On non-Playdate builds these expand to nothing.
 #ifdef TARGET_PLAYDATE
-#define POKEMINI_HOT      __attribute__((section(".text.hot")))
-#define POKEMINI_HOT_EXEC __attribute__((section(".text.hot.exec")))
+#define POKEMINI_HOT       __attribute__((section(".text.hot")))
+#define POKEMINI_HOT_EXEC  __attribute__((section(".text.hot.exec")))
 #else
 #define POKEMINI_HOT
 #define POKEMINI_HOT_EXEC

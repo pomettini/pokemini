@@ -1372,6 +1372,151 @@ First Togepi logs with `CF B5` felt slightly smoother and did not obviously
 regress. The matching single-op stack write test for `CF B1` / `PUSH B`
 regressed badly, so it was reverted. Keep `CF B5` only for now.
 
+## E7 / JNZ #ss local-fetch experiment — reverted (2026-05-11)
+
+Tried specializing `0xE7` (`JNZ #ss`, ~35% of Togepi/Pinball top-level
+dispatches) by inlining `Fetch8()` through a new `MinxCPU_XX_LocalFetch8()`
+helper that uses `MinxCPU_XX_LocalRead` instead of `MinxCPU_OnRead`.
+Implementation was byte-for-byte semantic match to upstream `Fetch8()`:
+same bank logic, same `PC.W.L` post-increment, same `MinxCPU.IR` update.
+
+Build size: `.text` grew by +128 bytes (114486 vs 114358 keeper). Hot
+dispatcher addresses unchanged.
+
+Result on Togepi JP, smooth LCD, first-three-levels: dropped to ~22 fps
+steady (down from keeper's ~25.9). Audio worked, no visual glitches —
+fully correct semantically. The +128-byte expansion was apparently
+enough to shift dispatcher layout into a less favorable cache pattern.
+
+Conclusion: reverted both the `MinxCPU_XX_LocalFetch8` helper and the
+E7 use site. Local-fetch is *not* a useful pattern beyond what the
+existing local-reads already buy us. The "fix the previous audio bug"
+theory was wrong on two counts: (a) my conservative implementation
+didn't break audio, and (b) even with audio working, perf doesn't pay
+off. A previous Codex attempt may have been unrelatedly buggy or may
+have hit the same I-cache cliff via a different code path.
+
+## MinxPRC_Render_Mono `__attribute__((optimize("O3")))` — reverted (2026-05-11)
+
+Tried per-function `-O3` on `MinxPRC_Render_Mono` (the BG + sprite
+render loop, ~72 calls/sec, currently in the cold section). Reasoning:
+narrow scope avoids the file-level `MinxPRC.c -O2` regression we
+already saw, and Render_Mono has nested loops + lots of memory reads
+that GCC `-O3` should unroll/inline aggressively.
+
+Build size: `MinxPRC_Render_Mono` ballooned from 460 bytes to **9,730
+bytes** (21×). GCC inlined `MinxPRC_OnRead` and `MinxPRC_DrawSprite8x8_Mono`
+into the body, then unrolled the nested 8×96 BG loop. Total `.text`
+grew from 114358 to 123262 (+8904).
+
+Result on Togepi JP, smooth LCD, first-three-levels: ~24 fps avg
+(down from keeper's ~25.9), with relatively *low variance* —
+clustered tightly around 24.5-25.2 fps, peaks to ~26.6, stalls
+17-22 fps. Subjectively user reported "felt smoother" than keeper
+because of the tighter variance, even though average and peaks were
+both lower.
+
+Conclusion: reverted. The avg-fps regression (~−2) outweighed the
+smoothness gain on raw benchmarks; ~+8.9 KB binary cost is also
+real. The interesting finding: the keeper's **higher peaks come
+with deeper variance**; experiments that touch this region of
+hot/cold layout tend to flatten the curve in both directions. None
+of the variants tested cleanly beat the keeper.
+
+(Earlier note here had this entry at "~22 fps regression" — that
+was a data mix-up with the E7 run. The actual Render_Mono `-O3`
+result is what's recorded above.)
+
+## MinxPRC_Sync `__attribute__((optimize("O3")))` — reverted (2026-05-11)
+
+Last perf experiment. `MinxPRC_Sync` is the smallest remaining hot
+target (248 bytes, ~256 calls/frame, currently in `.text.hot`).
+Branch-heavy state machine with no loops, so `-O3` shouldn't
+explode like it did for Render_Mono — risk profile much lower.
+
+Build size: `.text` grew by only **+48 bytes total**, `MinxPRC_Sync`
+went from 248 → 256 bytes (+8 bytes). Hot dispatcher byte-for-byte
+identical to keeper.
+
+Result on Togepi JP, smooth LCD, first-three-levels: ~24.5 fps avg
+(down from keeper's ~25.9), strikingly similar shape to Render_Mono
+above — cluster tight around 25.0-25.2 fps, peaks to 26.7, stalls
+17-22. Lower variance than keeper.
+
+Conclusion: reverted. The most diagnostic finding here: **Render_Mono
+(+8,904 bytes) and SyncO3 (+48 bytes) produced nearly identical fps
+profiles**. That tells us the regression isn't really about the size
+of the change — it's that *any* perturbation in this region of the
+I-cache shifts us off the keeper's specific sweet spot, and we land
+in a similar nearby steady-state. Further tweaking would just shuffle
+which scenes are slightly faster vs slower without lifting the
+average.
+
+Removed the `POKEMINI_O3` macro from `PokeMini.h` since no function
+benefits from it in the final config. Future experimenters can
+re-add if needed.
+
+## Production ceiling reached (2026-05-11)
+
+After E7 local-fetch (~4 fps regression), Render_Mono `-O3` (~2 fps
+regression with smoother variance), and SyncO3 (~1.4 fps regression
+with smoother variance) all failed to beat the keeper, we're at the
+realistic perf ceiling for this combination of (Cortex-M7 Rev A,
+4 KB I-cache, current PokeMini dispatcher architecture, current
+Playdate SDK).
+
+Key diagnostic insight from the last three experiments: **the keeper
+config sits on a specific I-cache sweet spot**. Any perturbation
+moves us off it into a nearby flatter steady-state with lower
+variance but lower average. Render_Mono +8,904 bytes and SyncO3 +48
+bytes produced nearly identical fps profiles — the size of the
+change was almost irrelevant.
+
+Cumulative wins delivered, in order:
+
+1. Section consolidation + 4 KB alignment of `MinxCPU_Exec`.
+2. `-Os` over `-O3` for the global Playdate build.
+3. Custom `link_map.ld`, `POKEMINI_HOT_EXEC` placement.
+4. `MinxTimers.c -O3` + `Hardware.c -O2` per-file overrides.
+5. Local-read helpers for `0x35`, `CE D0`, `CF B5` (selectively).
+6. Perf-keepalive (4× `getElapsedTime` per update + 1×/sec
+   format-rich log) — empirically required.
+7. Crank-as-C, 3x/3.5x scaling, LCD Soft/Fast toggle — UX, not perf.
+
+Heavy Japanese Togepi ends up at ~25.9 fps display avg, ~27.2-27.8
+fps in steady stretches, with periodic stalls into the high teens
+during game-driven busy-waits. Light scenes and English/commercial
+ROMs hit native PM speed.
+
+What does NOT work and should not be retried:
+
+- E7 / JNZ #ss specialization (above).
+- Render_Mono `-O3` attribute (above).
+- File-level `MinxCPU_XX -O2` (~+10 KB, tanks I-cache).
+- File-level `MinxPRC.c -O2` (similar).
+- Computed-goto / threaded dispatcher (regressed).
+- Broad `POKEMINI_CPU_FASTMEM` helper (regressed).
+- `synccycles` > 512 (breaks PRC).
+- `setRefreshRate(36)` to match PM (display can't sustain).
+
+What might still work, in approximate effort/risk order:
+
+- More opcode-specific local reads, *one at a time*, for opcodes
+  identified as hot in the cross-game profile. Each adds ~+128 bytes
+  and may regress; expect 0.0-0.3 fps net per addition.
+- `__attribute__((optimize("O3")))` on individual *small* functions
+  in the call graph (not Render_Mono — it's already huge). Maybe
+  `MinxPRC_Sync` itself? It's only 248 bytes and called per batch.
+- Dynarec / partial JIT for the cart-ROM execution path. Days of
+  work, uncertain payoff, fundamentally bigger lift than anything
+  attempted so far.
+
+What probably won't work without firmware/SDK changes:
+
+- True ITCM placement of the dispatcher (firmware doesn't expose).
+- DTCM placement of PM_RAM for fast emulator state (same).
+- Higher CPU clock (firmware-set).
+
 ## LCD shading / dither suppression (2026-05-03)
 
 PM games fake gray by toggling pixels every native frame (72 Hz). Real
