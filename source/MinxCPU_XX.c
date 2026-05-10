@@ -862,7 +862,7 @@ POKEMINI_HOT_EXEC int MinxCPU_Exec(void)
 			return 8;
 		OP(95) // TST [HL], #nn
 			I8A = Fetch8();
-			AND8(MinxCPU_XX_LocalRead(MinxCPU.HL.D), I8A);
+			AND8(MinxCPU_OnRead(1, MinxCPU.HL.D), I8A);
 			return 12;
 		OP(96) // TST A, #nn
 			I8A = Fetch8();

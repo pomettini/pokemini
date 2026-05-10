@@ -25,9 +25,11 @@ Return to the picker mid-game from Playdate's system menu.
 | D-pad              | D-pad        |
 | A                  | A            |
 | B                  | B            |
+| Crank angle zone   | C            |
 | Shake the device   | Shake        |
 
-Pokémon Mini's **C** button isn't mapped yet.
+Undock the crank and rotate it into the 60°-180° zone to hold Pokémon Mini's
+**C** button. Move it outside that zone, or dock it, to release C.
 
 ## System Menu
 
@@ -39,7 +41,6 @@ Pokémon Mini's **C** button isn't mapped yet.
 
 - No EEPROM save on device.
 - No save-state UI yet.
-- C button unmapped.
 - Heavy sprite scenes run ~7% slow.
 
 ## Credits

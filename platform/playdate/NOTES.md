@@ -1305,6 +1305,32 @@ only control is about 0.7 fps slower in the steady section, so `0x35` local
 read appears to be a real win for Shock Tetris. Restored the `0x35` local-read
 path in the active build.
 
+Pokemon Pinball Mini Japan sample on the active two-opcode local-read build,
+with C available via crank: across 46 non-zero 30-update windows, average was
+~23.91 fps, with 39 windows >=22 fps, 21 windows >=23 fps, 16 windows >=24 fps,
+13 windows >=25 fps, 11 windows >=26 fps, and 7 windows >=27 fps. After the
+early/title transition section, the later gameplay section averaged ~22.77 fps
+across 32 windows. This is a playable data point, not yet a clean A/B versus
+keeper or `0x35`-only/`0x95`-only variants.
+
+Pinball control build prepared: `0x35` / `CMP A, [#nnnn]` still uses the local
+inline read helper, while `0x95` / `TST [HL], #nn` was restored to
+`MinxCPU_OnRead()`. Use this `.pdx` to isolate whether the `0x95` local-read
+path helped Pinball.
+
+## Controls (2026-05-10)
+
+Pokemon Mini **C** is now mapped to a Playdate crank angle zone in
+`PokeMini_Playdate.c::handle_input()`: undock the crank and rotate into
+60°-180° to hold C; move outside the zone or dock it to release C. This sends
+`MINX_KEY_C` directly through `UIMenu_KeyEvent()` and intentionally bypasses
+the joystick mapping table so older saved options where C was unmapped still
+get the input. This avoids using the dock/undock mechanism itself as a gameplay
+button.
+
+Earlier A+B chord and pure dock/undock attempts were removed because they were
+not suitable for repeated Pinball testing.
+
 ## LCD shading / dither suppression (2026-05-03)
 
 PM games fake gray by toggling pixels every native frame (72 Hz). Real

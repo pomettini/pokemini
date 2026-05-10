@@ -92,20 +92,22 @@ Still pending — the graphical assets (work in progress):
 
 ## 2. Important UX (would feel broken without)
 
-### 2a. C button mapping
+### 2a. C button mapping — first pass done
 The Pokémon Mini has A, B, **C**, D-pad, Power, Shake = 9 inputs.
 Playdate gives us A, B, D-pad, Crank, accelerometer = 7 inputs total.
-Currently C is unmapped (PD_KeysMapping in PokeMini_Playdate.c:76 sets
-it to -1). Some games genuinely use C.
+For now, C is synthesized as a held **crank angle zone** in
+`PokeMini_Playdate.c::handle_input()`: undock the crank and rotate into
+60°-180° to hold C; move outside the zone or dock it to release C. It bypasses
+the saved joystick mapping table so existing configs where C was unmapped
+still get the input.
 
-Options, in order of preference:
+Longer-term options:
 - **Crank-pressed-down** (Playdate's `pd->system->isCrankDocked`): use
   crank rotation for one thing, docked state as a chord. Awkward.
-- **A+B chord**: press both simultaneously = C. Easy, but conflicts with
-  any game that uses A+B.
+- **A+B chord**: tried and rejected for now; it did not work reliably enough
+  for Pinball testing and conflicts with any game that uses A+B.
 - **Move "Shake" off the crank to the accelerometer** (see 2c) and put
-  C on crank rotation. Cleanest split — most users never use Shake, and
-  crank-rotate-to-C is intuitive.
+  C on crank state/rotation. Current first pass uses a crank angle hold zone.
 - **In-app remappable controls** (see 2d). Best long-term answer.
 
 ### 2b. Pause on Playdate system menu
@@ -193,6 +195,14 @@ frame = ~33ms = 2.4 PM frames late). If users complain, time-stamp the
 button events and replay them at the right PM frame inside the
 fractional-pacing loop.
 
+### 3g. Full-screen scaling experiment
+Very low priority: investigate a fuller-screen presentation, roughly 2.5x
+logical scaling from the 96x64 Pokemon Mini framebuffer toward the Playdate
+screen. This cannot be a clean integer scale like the current 3x renderer, so
+expect uneven pixels, extra resampling cost, or a custom row/column pattern.
+Only pursue if the current centered 3x view feels too small after the core
+features are done.
+
 ## 4. Code/build hygiene
 
 ### 4a. Remove the lingering test ROM — done
@@ -252,12 +262,12 @@ A reasonable shipping path:
 5. **1b** — EEPROM persistence (a few hours, biggest player-facing win)
 6. **2b, 3c** — pause/resume handling (an hour each)
 7. **3a, 3b** — per-ROM data isolation + empty-state hint (half day)
-8. **2a, 2d** — C button mapping (likely on the now-free crank) +
-   remaining settings menu wiring (audio/reset/save-state items; LCD
-   mode and ROM picker are already wired)
+8. **2d** — remaining settings menu wiring (audio/reset/save-state items;
+   LCD mode and ROM picker are already wired; C has a crank first pass)
 9. **2e, 1e** — save states UI + card art when graphics are ready
    (half day)
 10. **1d (Credits)**, **3d, 3e, 3f** — in-app credits + polish pass
     (as time allows)
+11. **3g** — full-screen / 2.5x-ish scaling investigation (very low priority)
 
 That's roughly 1-2 days of focused work to a v1.0 release from here.

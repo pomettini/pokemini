@@ -25,6 +25,7 @@
 #include "PokeMini.h"
 #include "Hardware.h"
 #include "MinxCPU.h"
+#include "MinxIO.h"
 #include "Joystick.h"
 #include "Video_x1.h"
 #include "UI.h"
@@ -167,6 +168,11 @@ static SoundSource *audio_source = NULL;
 static PDMenuItem *lcd_mode_menu_item = NULL;
 static const char *lcd_mode_options[] = { "Soft", "Fast" };
 
+// C is held while the crank sits in this undocked angle zone. This avoids
+// using the dock/undock mechanism itself as a gameplay button.
+#define C_CRANK_ANGLE_MIN 60.0f
+#define C_CRANK_ANGLE_MAX 180.0f
+
 // Playdate physical button names used by the joystick subsystem
 static char *PD_KeysNames[] = {
 	"Off",    // -1
@@ -184,7 +190,7 @@ static int PD_KeysMapping[] = {
 	-1,  // Menu  -> unmapped (handled by system menu)
 	 0,  // A     -> button A
 	 1,  // B     -> button B
-	-1,  // C     -> unmapped
+	-1,  // C     -> direct crank angle hold in handle_input()
 	 2,  // Up    -> D-pad Up
 	 3,  // Down  -> D-pad Down
 	 4,  // Left  -> D-pad Left
@@ -263,6 +269,19 @@ static void handle_input(void)
 	if (released & kButtonA)     JoystickButtonsEvent(0, 0);
 	if (pushed   & kButtonB)     JoystickButtonsEvent(1, 1);
 	if (released & kButtonB)     JoystickButtonsEvent(1, 0);
+
+	static int c_crank_pressed = 0;
+	int c_crank_now = 0;
+	if (!pd->system->isCrankDocked()) {
+		float crank_angle = pd->system->getCrankAngle();
+		c_crank_now = (crank_angle >= C_CRANK_ANGLE_MIN &&
+		               crank_angle <= C_CRANK_ANGLE_MAX);
+	}
+	if (c_crank_now != c_crank_pressed) {
+		UIMenu_KeyEvent(MINX_KEY_C, c_crank_now);
+		c_crank_pressed = c_crank_now;
+	}
+
 	if (pushed   & kButtonUp)    JoystickButtonsEvent(2, 1);
 	if (released & kButtonUp)    JoystickButtonsEvent(2, 0);
 	if (pushed   & kButtonDown)  JoystickButtonsEvent(3, 1);
