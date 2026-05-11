@@ -21,6 +21,10 @@
 #include "PokeMini.h"
 #include "MinxCPU.h"
 
+#if defined(TARGET_PLAYDATE)
+#define POKEMINI_COMPACT_CE_ABS_MOV
+#endif
+
 #if defined(POKEMINI_CPU_FASTMEM) && defined(PERFORMANCE)
 #define MinxCPU_OnRead MinxCPU_FastRead
 #define MinxCPU_OnWrite MinxCPU_FastWrite
@@ -53,6 +57,48 @@ POKEMINI_HOT int MinxCPU_ExecCE(void)
 	MinxCPU.IR = Fetch8();
 #ifdef PD_OPCODE_DIAG
 	MinxCPU_OpcodeDiag[MINXCPU_OPDIAG_CE][MinxCPU.IR]++;
+#endif
+
+#ifdef POKEMINI_COMPACT_CE_ABS_MOV
+	if ((MinxCPU.IR & 0xF8) == 0xD0) {
+		I8A = MinxCPU.IR;
+		I16 = Fetch16();
+		if ((I8A & 0x04) == 0) {
+			uint8_t I8B = (I8A == 0xD0) ? MinxCPU_CE_LocalRead(I16) : MinxCPU_OnRead(1, I16);
+			switch (I8A & 0x03) {
+			case 0x00:
+				MinxCPU.BA.B.L = I8B;
+				break;
+			case 0x01:
+				MinxCPU.BA.B.H = I8B;
+				break;
+			case 0x02:
+				MinxCPU.HL.B.L = I8B;
+				break;
+			default:
+				MinxCPU.HL.B.H = I8B;
+				break;
+			}
+		} else {
+			uint8_t I8B;
+			switch (I8A & 0x03) {
+			case 0x00:
+				I8B = MinxCPU.BA.B.L;
+				break;
+			case 0x01:
+				I8B = MinxCPU.BA.B.H;
+				break;
+			case 0x02:
+				I8B = MinxCPU.HL.B.L;
+				break;
+			default:
+				I8B = MinxCPU.HL.B.H;
+				break;
+			}
+			MinxCPU_OnWrite(1, I16, I8B);
+		}
+		return 20;
+	}
 #endif
 
 	// Process instruction
@@ -898,6 +944,7 @@ POKEMINI_HOT int MinxCPU_ExecCE(void)
 			MinxCPU.Y.B.I = MinxCPU.BA.B.L;
 			return 8;
 
+#ifndef POKEMINI_COMPACT_CE_ABS_MOV
 		case 0xD0: // MOV A, [#nnnn]
 			I16 = Fetch16();
 			MinxCPU.BA.B.L = MinxCPU_CE_LocalRead(I16);
@@ -931,6 +978,7 @@ POKEMINI_HOT int MinxCPU_ExecCE(void)
 			I16 = Fetch16();
 			MinxCPU_OnWrite(1, I16, MinxCPU.HL.B.H);
 			return 20;
+#endif
 
 		case 0xD8: // MUL L, A
 			MUL();
