@@ -191,6 +191,31 @@ static volatile int emu_paused = 0;
 // Audio source handle
 static SoundSource *audio_source = NULL;
 
+static int audio_callback(void *context, int16_t *left, int16_t *right, int len);
+
+static void stop_audio_source(void)
+{
+	if (audio_source) {
+		pd->sound->removeSource(audio_source);
+		audio_source = NULL;
+	}
+}
+
+static void start_audio_source(void)
+{
+	stop_audio_source();
+	pd->sound->setOutputsActive(1, 1);
+
+	audio_source = pd->sound->addSource(audio_callback, NULL, 1);
+	if (audio_source) {
+		pd->sound->source->setVolume(audio_source, 1.0f, 1.0f);
+		pd->sound->setOutputsActive(1, 1);
+		pd->system->logToConsole("%s: audio source started", AppName);
+	} else {
+		pd->system->logToConsole("%s: audio source creation failed", AppName);
+	}
+}
+
 // System menu item for LCD quality/performance switching.
 static PDMenuItem *lcd_mode_menu_item = NULL;
 static const char *lcd_mode_options[] = { "Soft", "Fast" };
@@ -791,6 +816,7 @@ static void start_emulation_with_rom(const char *path)
 
 	LCDDirty = 1;
 	app_mode = MODE_EMULATOR;
+	start_audio_source();
 }
 
 // Switch back to the picker. Called from the Playdate system menu so the
@@ -802,6 +828,7 @@ static void return_to_picker(void)
 	rom_cursor = 0;
 	rom_view_top = 0;
 	app_mode = MODE_PICKER;
+	stop_audio_source();
 }
 
 static void menu_item_picker_cb(void *userdata)
@@ -1027,14 +1054,9 @@ int eventHandler(PlaydateAPI *playdate, PDSystemEvent event, uint32_t arg)
 				AppName, font_err ? font_err : "(null)");
 		}
 
-		// Start the audio source up front so we don't have to thread it
-		// through the picker -> emulator transition. While the picker is
-		// up MinxAudio's state is idle so the source emits silence.
-		audio_source = pd->sound->addSource(audio_callback, NULL, 1);
-		if (audio_source)
-			pd->sound->source->setVolume(audio_source, 1.0f, 1.0f);
-		else
-			pd->system->logToConsole("%s: audio source creation failed", AppName);
+		// The audio source is started when a ROM starts, not while the picker
+		// is up. Creating it at the emulation transition avoids occasional
+		// silent-source behavior observed on device after layout-only rebuilds.
 
 		// System menu item: lets the player return to the ROM picker without
 		// quitting the app. Persists for the lifetime of the process.
@@ -1083,6 +1105,8 @@ int eventHandler(PlaydateAPI *playdate, PDSystemEvent event, uint32_t arg)
 
 	} else if (event == kEventResume) {
 		emu_paused = 0;
+		if (app_mode == MODE_EMULATOR)
+			pd->sound->setOutputsActive(1, 1);
 
 	} else if (event == kEventTerminate) {
 		if (audio_source) {

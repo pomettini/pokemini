@@ -582,7 +582,56 @@ the good tested offsets (`0x40`, `0x80`, `0xC0`, `0x100`) are all multiples of
 likely factor and prefer the next `0x40`-multiple (`0x140`) over more half-step
 tests for now.
 
-Sweep build pending test: `0x140` offset. Pure linker-layout change only.
+Race Mini / Togepi / Pinball / Sodateyasan result for `0x140`: strong keeper
+candidate. Race one-lap returned to the good layout band: early/mid sections
+showed many high-20s windows, and the later steady section mostly stayed
+around `21.0-22.0 fps`, better than the `0xE0` regression and competitive with
+`0xC0`/`0x100`. Togepi looked excellent, with long stretches around
+`28-29 fps`. Pinball's 22-second in-game sample stayed mostly in the
+`23-24 fps` band after the initial fast section. Sodateyasan, mostly still
+images, ran close to full speed (`28-29 fps`) as expected. This strengthens
+the hypothesis that `0x40`-multiple placement matters.
+
+Race Mini one-lap result for `0x180`: competitive with `0x140`, but not a
+clear replacement. Early/mid windows were very strong, including several
+`26-28 fps` samples, and the later heavy section mostly stayed around
+`21.0-22.1 fps`. This keeps `0x180` in the good `0x40`-multiple family, but
+`0x140` remains at least as convincing because it also had good Togepi,
+Pinball, and Sodateyasan coverage.
+
+Race Mini one-lap result for `0x1C0`: good, but still not a clear improvement
+over `0x140`. Early/mid windows were strong and the later heavy section mostly
+sat around `20.7-21.6 fps`, with occasional `21.6 fps` windows, but it did not
+beat the `0x140`/`0x180` family convincingly. Stop the upward sweep here for
+now.
+
+Current production keeper: `0x140` offset. It has the best combined evidence:
+Race is strong, Togepi is excellent, Pinball is healthy, and the still-image
+Sodateyasan sample stays near full speed. Rebuild `0x140` before broader game
+testing.
+
+Audio lifecycle note: one `0x140` device build unexpectedly had silent in-game
+audio despite the emulator running normally. The audio source used to be created
+during app init while the ROM picker was active and `audio_callback` was gated
+to silence. To avoid a layout/lifecycle-sensitive silent-source state on device,
+start the Playdate `SoundSource` only after a ROM enters `MODE_EMULATOR`, and
+remove it when returning to the picker. This keeps the current CPU layout pinned
+while making audio startup explicit at the emulation transition.
+
+Follow-up clue: if the first game after app launch had no audio, opening the
+system menu, returning to the ROM picker, and starting any game made audio work.
+The delayed remove/add hypothesis did **not** fix it: creating the audio source
+at ROM start, then recreating it once after three update ticks still behaved the
+same as before. Next hypothesis is that the system-menu trip wakes the Playdate
+audio output path rather than repairing the source object, so the current test
+explicitly calls `pd->sound->setOutputsActive(1, 1)` when starting emulation and
+when resuming from the system menu.
+
+Confirmed: `setOutputsActive(1, 1)` fixed first-launch audio on device. Race
+Mini one-lap with this audio fix stayed in the good `0x140` family: early/mid
+sections still hit high-20s windows, and the heavier steady section mostly sat
+around `20.1-21.1 fps`. Treat the audio-output activation as part of the keeper
+stack, not as a temporary diagnostic.
 
 ### Guidance for next performance work
 
