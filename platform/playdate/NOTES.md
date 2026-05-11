@@ -205,6 +205,126 @@ early-return is safe and worth keeping for performance.
 - **Diagnostic `logToConsole` is expensive** — even 60 calls during startup
   noticeably delays first frame. Strip diag logs once a fix is verified.
 
+## Performance: opcode compaction experiments (2026-05-11)
+
+Goal: reduce Playdate device CPU cost on heavy ROMs by making the hottest
+opcode dispatch paths fit the Cortex-M7 cache better, without breaking
+emulation correctness. The working method is now:
+
+1. Pick a hot opcode family from real device logs.
+2. Build a host-side equivalence checker for that exact family.
+3. Add a Playdate-only compact path.
+4. Compile out duplicate original cases if the compact path makes them
+   unreachable.
+5. Rebuild device `.pdx`, compare symbol size, then test on real hardware.
+
+The host checkers live in `platform/playdate/tools/`:
+
+- `minx_alu_decode_check.c` — XX `00-3F`
+- `minx_mov_decode_check.c` — XX `40-7F`
+- `minx_short_jump_decode_check.c` — XX `E4-E7`
+- `minx_ce_abs_mov_check.c` — CE `D0-D7`
+- `minx_ce_xshort_a_check.c` — CE `00/08/10/18/20/28/30/38/40`
+  (kept as documentation of a failed runtime experiment)
+
+### Current good stack
+
+Keep these enabled for now:
+
+- **Compact XX ALU `00-3F`** (`POKEMINI_COMPACT_XX_ALU`). Correctness
+  proved by randomized host check. Alone it did not noticeably improve
+  performance, but it is safe and became useful once paired with MOV.
+- **Compact XX MOV `40-7F`** (`POKEMINI_COMPACT_XX_MOV`). This was the
+  first real cache-footprint win. `MinxCPU_Exec` shrank from about
+  `0x16b6` to `0x12c2` once duplicate cases were compiled out. Togepi
+  improved from mostly low-20s / mid-20s fps windows to many 26-29 fps
+  windows.
+- **Compact XX short conditional jumps `E4-E7`**
+  (`POKEMINI_COMPACT_XX_SHORT_JUMP`). Size change was tiny
+  (`0x12c2 -> 0x12b8`), but the hot branch path mattered. Togepi became
+  dramatically smoother, often 28-29 fps; Pinball also improved strongly.
+  Tetris was neutral-to-slightly-worse in some runs, so keep watching it.
+- **Compact CE absolute MOV `D0-D7`**
+  (`POKEMINI_COMPACT_CE_ABS_MOV`). Targets hot `CE D0` / `CE D4` patterns.
+  It is safe and gave a modest Tetris recovery after the short-jump change.
+  `MinxCPU_ExecCE` sits around `0x1de6` with this enabled.
+
+### Important failed experiments
+
+#### Cold-helper opcode split
+
+Moving rare XX cases to cold helpers shrank `MinxCPU_Exec` under 4 KB, but
+device performance collapsed to roughly 15 fps. The call/branch/cache cost
+was worse than the original switch layout, and several supposedly "cold"
+paths were not cold enough.
+
+Lesson: **do not chase 4 KB at any cost**. A smaller dispatcher can be slower
+if it turns fallthrough switch code into calls or poorly-predicted branches.
+
+#### First compact ALU attempt
+
+The first `00-3F` decoded ALU path glitched the screen and never got past
+boot. Root cause: `Fetch8()` overwrites `MinxCPU.IR`; the decoded path used
+`MinxCPU.IR` after fetching operands, so immediate bytes could be mistaken
+for the opcode.
+
+Fix pattern: capture the opcode immediately after the instruction fetch:
+
+```c
+MinxCPU.IR = Fetch8();
+uint8_t opcode = MinxCPU.IR;
+```
+
+Then use `opcode` for all decode decisions. The original `switch(MinxCPU.IR)`
+was safe because the switch expression is evaluated once before case bodies
+call `Fetch8()`.
+
+#### CE `[X+#ss] -> A` compact family
+
+Tried a compact path for CE `00/08/10/18/20/28/30/38/40`, including hot
+`CE 28` and `CE 40`. The host checker passed and `MinxCPU_ExecCE` shrank
+(`0x1de6 -> 0x1d14`), but Tetris gameplay dropped badly to around 18-19 fps.
+Boot animation, however, became very smooth / steady 30 fps.
+
+Current state: **runtime macro disabled**. The checker remains in `tools/`
+for reference.
+
+Likely explanation:
+
+- Boot and gameplay have different opcode mixes. The boot sequence probably
+  hits this exact compact family often, so it benefited.
+- Tetris gameplay likely has heavy CE traffic outside that family. The new
+  early CE gate and second-level operation switch became a tax on the broader
+  CE stream.
+- Smaller code was not faster here: extra branches, more live temporaries,
+  and worse layout likely outweighed the saved cases.
+
+Lesson: **symbol size is not the metric; device logs are**. A compact path
+must improve the real phase we care about, not only shrink the function.
+
+### Current game observations
+
+- **Togepi no Daibouken**: biggest beneficiary. ALU+MOV helped; adding
+  short jumps made it feel very smooth, with many 28-29 fps windows.
+- **Pokemon Pinball Mini**: strong beneficiary. Baseline sustained gameplay
+  was about 20.5-21.4 fps; current good stack is mostly 22.8-23.7 fps with
+  early windows near 28-30 fps.
+- **Pokemon Tetris / Shock Tetris family**: mixed. ALU+MOV was neutral to
+  slightly positive; short jumps may be slightly worse; CE `D0-D7` modestly
+  recovered some ground. The failed CE `[X+#ss] -> A` family was clearly bad
+  for gameplay despite improving boot.
+
+### Guidance for next performance work
+
+- Keep the current good stack as the baseline.
+- Do not re-enable `POKEMINI_COMPACT_CE_XSHORT_A` without a specific A/B
+  reason.
+- Prefer tiny, isolated CE/CF changes over broad decoded CE dispatch.
+- If optimizing CE again, consider one hot opcode or a very small family at a
+  time, with a checker and a rollback plan.
+- Re-run at least Togepi, Tetris, and Pinball after any dispatcher-layout
+  change. One game is not enough; opcode locality wins are workload-specific.
+
 ## Performance: what landed and what was tried (2026-05-03)
 
 Final state: **100% real PM speed for typical gameplay**, 93% under heavy

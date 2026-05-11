@@ -59,6 +59,46 @@ POKEMINI_HOT int MinxCPU_ExecCE(void)
 	MinxCPU_OpcodeDiag[MINXCPU_OPDIAG_CE][MinxCPU.IR]++;
 #endif
 
+#ifdef POKEMINI_COMPACT_CE_XSHORT_A
+	if (((MinxCPU.IR & 0x07) == 0) && (MinxCPU.IR <= 0x40)) {
+		uint8_t I8B = MinxCPU.IR;
+		I8A = Fetch8();
+		I16 = MinxCPU.X.W.L + S8_TO_16(I8A);
+		I8A = MinxCPU_OnRead(1, (MinxCPU.X.B.I << 16) | I16);
+
+		switch (I8B >> 3) {
+		case 0:
+			MinxCPU.BA.B.L = ADD8(MinxCPU.BA.B.L, I8A);
+			break;
+		case 1:
+			MinxCPU.BA.B.L = ADC8(MinxCPU.BA.B.L, I8A);
+			break;
+		case 2:
+			MinxCPU.BA.B.L = SUB8(MinxCPU.BA.B.L, I8A);
+			break;
+		case 3:
+			MinxCPU.BA.B.L = SBC8(MinxCPU.BA.B.L, I8A);
+			break;
+		case 4:
+			MinxCPU.BA.B.L = AND8(MinxCPU.BA.B.L, I8A);
+			break;
+		case 5:
+			MinxCPU.BA.B.L = OR8(MinxCPU.BA.B.L, I8A);
+			break;
+		case 6:
+			SUB8(MinxCPU.BA.B.L, I8A);
+			break;
+		case 7:
+			MinxCPU.BA.B.L = XOR8(MinxCPU.BA.B.L, I8A);
+			break;
+		default:
+			MinxCPU.BA.B.L = I8A;
+			break;
+		}
+		return 16;
+	}
+#endif
+
 #ifdef POKEMINI_COMPACT_CE_ABS_MOV
 	if ((MinxCPU.IR & 0xF8) == 0xD0) {
 		I8A = MinxCPU.IR;
@@ -104,11 +144,13 @@ POKEMINI_HOT int MinxCPU_ExecCE(void)
 	// Process instruction
 	switch(MinxCPU.IR) {
 
+#ifndef POKEMINI_COMPACT_CE_XSHORT_A
 		case 0x00: // ADD A, [X+#ss]
 			I8A = Fetch8();
 			I16 = MinxCPU.X.W.L + S8_TO_16(I8A);
 			MinxCPU.BA.B.L = ADD8(MinxCPU.BA.B.L, MinxCPU_OnRead(1, (MinxCPU.X.B.I << 16) | I16));
 			return 16;
+#endif
 		case 0x01: // ADD A, [Y+#ss]
 			I8A = Fetch8();
 			I16 = MinxCPU.Y.W.L + S8_TO_16(I8A);
@@ -137,11 +179,13 @@ POKEMINI_HOT int MinxCPU_ExecCE(void)
 			MinxCPU_OnWrite(1, MinxCPU.HL.D, ADD8(MinxCPU_OnRead(1, MinxCPU.HL.D), MinxCPU_OnRead(1, MinxCPU.Y.D)));
 			return 20;
 
+#ifndef POKEMINI_COMPACT_CE_XSHORT_A
 		case 0x08: // ADC A, [X+#ss]
 			I8A = Fetch8();
 			I16 = MinxCPU.X.W.L + S8_TO_16(I8A);
 			MinxCPU.BA.B.L = ADC8(MinxCPU.BA.B.L, MinxCPU_OnRead(1, (MinxCPU.X.B.I << 16) | I16));
 			return 16;
+#endif
 		case 0x09: // ADC A, [Y+#ss]
 			I8A = Fetch8();
 			I16 = MinxCPU.Y.W.L + S8_TO_16(I8A);
@@ -170,11 +214,13 @@ POKEMINI_HOT int MinxCPU_ExecCE(void)
 			MinxCPU_OnWrite(1, MinxCPU.HL.D, ADC8(MinxCPU_OnRead(1, MinxCPU.HL.D), MinxCPU_OnRead(1, MinxCPU.Y.D)));
 			return 20;
 
+#ifndef POKEMINI_COMPACT_CE_XSHORT_A
 		case 0x10: // SUB A, [X+#ss]
 			I8A = Fetch8();
 			I16 = MinxCPU.X.W.L + S8_TO_16(I8A);
 			MinxCPU.BA.B.L = SUB8(MinxCPU.BA.B.L, MinxCPU_OnRead(1, (MinxCPU.X.B.I << 16) | I16));
 			return 16;
+#endif
 		case 0x11: // SUB A, [Y+#ss]
 			I8A = Fetch8();
 			I16 = MinxCPU.Y.W.L + S8_TO_16(I8A);
@@ -203,11 +249,13 @@ POKEMINI_HOT int MinxCPU_ExecCE(void)
 			MinxCPU_OnWrite(1, MinxCPU.HL.D, SUB8(MinxCPU_OnRead(1, MinxCPU.HL.D), MinxCPU_OnRead(1, MinxCPU.Y.D)));
 			return 20;
 
+#ifndef POKEMINI_COMPACT_CE_XSHORT_A
 		case 0x18: // SBC A, [X+#ss]
 			I8A = Fetch8();
 			I16 = MinxCPU.X.W.L + S8_TO_16(I8A);
 			MinxCPU.BA.B.L = SBC8(MinxCPU.BA.B.L, MinxCPU_OnRead(1, (MinxCPU.X.B.I << 16) | I16));
 			return 16;
+#endif
 		case 0x19: // SBC A, [Y+#ss]
 			I8A = Fetch8();
 			I16 = MinxCPU.Y.W.L + S8_TO_16(I8A);
@@ -236,11 +284,13 @@ POKEMINI_HOT int MinxCPU_ExecCE(void)
 			MinxCPU_OnWrite(1, MinxCPU.HL.D, SBC8(MinxCPU_OnRead(1, MinxCPU.HL.D), MinxCPU_OnRead(1, MinxCPU.Y.D)));
 			return 20;
 
+#ifndef POKEMINI_COMPACT_CE_XSHORT_A
 		case 0x20: // AND A, [X+#ss]
 			I8A = Fetch8();
 			I16 = MinxCPU.X.W.L + S8_TO_16(I8A);
 			MinxCPU.BA.B.L = AND8(MinxCPU.BA.B.L, MinxCPU_OnRead(1, (MinxCPU.X.B.I << 16) | I16));
 			return 16;
+#endif
 		case 0x21: // AND A, [Y+#ss]
 			I8A = Fetch8();
 			I16 = MinxCPU.Y.W.L + S8_TO_16(I8A);
@@ -269,11 +319,13 @@ POKEMINI_HOT int MinxCPU_ExecCE(void)
 			MinxCPU_OnWrite(1, MinxCPU.HL.D, AND8(MinxCPU_OnRead(1, MinxCPU.HL.D), MinxCPU_OnRead(1, MinxCPU.Y.D)));
 			return 20;
 
+#ifndef POKEMINI_COMPACT_CE_XSHORT_A
 		case 0x28: // OR A, [X+#ss]
 			I8A = Fetch8();
 			I16 = MinxCPU.X.W.L + S8_TO_16(I8A);
 			MinxCPU.BA.B.L = OR8(MinxCPU.BA.B.L, MinxCPU_OnRead(1, (MinxCPU.X.B.I << 16) | I16));
 			return 16;
+#endif
 		case 0x29: // OR A, [Y+#ss]
 			I8A = Fetch8();
 			I16 = MinxCPU.Y.W.L + S8_TO_16(I8A);
@@ -302,11 +354,13 @@ POKEMINI_HOT int MinxCPU_ExecCE(void)
 			MinxCPU_OnWrite(1, MinxCPU.HL.D, OR8(MinxCPU_OnRead(1, MinxCPU.HL.D), MinxCPU_OnRead(1, MinxCPU.Y.D)));
 			return 20;
 
+#ifndef POKEMINI_COMPACT_CE_XSHORT_A
 		case 0x30: // CMP A, [X+#ss]
 			I8A = Fetch8();
 			I16 = MinxCPU.X.W.L + S8_TO_16(I8A);
 			SUB8(MinxCPU.BA.B.L, MinxCPU_OnRead(1, (MinxCPU.X.B.I << 16) | I16));
 			return 16;
+#endif
 		case 0x31: // CMP A, [Y+#ss]
 			I8A = Fetch8();
 			I16 = MinxCPU.Y.W.L + S8_TO_16(I8A);
@@ -335,11 +389,13 @@ POKEMINI_HOT int MinxCPU_ExecCE(void)
 			SUB8(MinxCPU_OnRead(1, MinxCPU.HL.D), MinxCPU_OnRead(1, MinxCPU.Y.D));
 			return 20;
 
+#ifndef POKEMINI_COMPACT_CE_XSHORT_A
 		case 0x38: // XOR A, [X+#ss]
 			I8A = Fetch8();
 			I16 = MinxCPU.X.W.L + S8_TO_16(I8A);
 			MinxCPU.BA.B.L = XOR8(MinxCPU.BA.B.L, MinxCPU_OnRead(1, (MinxCPU.X.B.I << 16) | I16));
 			return 16;
+#endif
 		case 0x39: // XOR A, [Y+#ss]
 			I8A = Fetch8();
 			I16 = MinxCPU.Y.W.L + S8_TO_16(I8A);
@@ -368,11 +424,13 @@ POKEMINI_HOT int MinxCPU_ExecCE(void)
 			MinxCPU_OnWrite(1, MinxCPU.HL.D, XOR8(MinxCPU_OnRead(1, MinxCPU.HL.D), MinxCPU_OnRead(1, MinxCPU.Y.D)));
 			return 20;
 
+#ifndef POKEMINI_COMPACT_CE_XSHORT_A
 		case 0x40: // MOV A, [X+#ss]
 			I8A = Fetch8();
 			I16 = MinxCPU.X.W.L + S8_TO_16(I8A);
 			MinxCPU.BA.B.L = MinxCPU_OnRead(1, (MinxCPU.X.B.I << 16) | I16);
 			return 16;
+#endif
 		case 0x41: // MOV A, [Y+#ss]
 			I8A = Fetch8();
 			I16 = MinxCPU.Y.W.L + S8_TO_16(I8A);
