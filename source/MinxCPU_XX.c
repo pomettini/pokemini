@@ -32,6 +32,12 @@
 #define MinxCPU_OnWrite MinxCPU_FastWrite
 #endif
 
+#ifdef PD_PERF_DIAG
+extern unsigned int PDPerf_NowUs(void);
+extern unsigned int PDPerf_CeUs;
+extern unsigned int PDPerf_CfUs;
+#endif
+
 #ifdef PD_OPCODE_DIAG
 uint32_t MinxCPU_OpcodeDiag[MINXCPU_OPDIAG_TABLES][256];
 
@@ -1325,10 +1331,28 @@ POKEMINI_HOT_EXEC int MinxCPU_Exec(void)
 			return 12;
 
 		OP(CE) // Expand 0
+#ifdef PD_PERF_DIAG
+		{
+			unsigned int t0 = PDPerf_NowUs();
+			int cycles = MinxCPU_ExecCE();
+			PDPerf_CeUs += PDPerf_NowUs() - t0;
+			return cycles;
+		}
+#else
 			return MinxCPU_ExecCE();
+#endif
 
 		OP(CF) // Expand 1
+#ifdef PD_PERF_DIAG
+		{
+			unsigned int t0 = PDPerf_NowUs();
+			int cycles = MinxCPU_ExecCF();
+			PDPerf_CfUs += PDPerf_NowUs() - t0;
+			return cycles;
+		}
+#else
 			return MinxCPU_ExecCF();
+#endif
 
 		OP(D0) // SUB BA, #nnnn
 			I16 = Fetch16();

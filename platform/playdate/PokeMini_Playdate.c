@@ -37,6 +37,8 @@ unsigned int PDPerf_CpuUs = 0;
 unsigned int PDPerf_TimersUs = 0;
 unsigned int PDPerf_PrcUs = 0;
 unsigned int PDPerf_AudioUs = 0;
+unsigned int PDPerf_CeUs = 0;
+unsigned int PDPerf_CfUs = 0;
 
 static unsigned int pdperf_emu_us = 0;
 static unsigned int pdperf_input_us = 0;
@@ -58,12 +60,15 @@ static void pdperf_log_and_reset(void)
 		? pdperf_update_us - accounted : 0;
 
 	pd->system->logToConsole(
-		"diag: upd=%u pm=%u total=%uus emu=%u cpu=%u tim=%u prc=%u aud=%u input=%u render=%u misc=%u",
+		"diag: upd=%u pm=%u total=%uus emu=%u cpu=%u ce=%u cf=%u tim=%u prc=%u aud=%u input=%u render=%u misc=%u",
 		pdperf_updates, pdperf_pm_frames, pdperf_update_us,
-		pdperf_emu_us, PDPerf_CpuUs, PDPerf_TimersUs, PDPerf_PrcUs,
-		PDPerf_AudioUs, pdperf_input_us, pdperf_render_us, misc);
+		pdperf_emu_us, PDPerf_CpuUs, PDPerf_CeUs, PDPerf_CfUs,
+		PDPerf_TimersUs, PDPerf_PrcUs, PDPerf_AudioUs,
+		pdperf_input_us, pdperf_render_us, misc);
 
 	PDPerf_CpuUs = 0;
+	PDPerf_CeUs = 0;
+	PDPerf_CfUs = 0;
 	PDPerf_TimersUs = 0;
 	PDPerf_PrcUs = 0;
 	PDPerf_AudioUs = 0;

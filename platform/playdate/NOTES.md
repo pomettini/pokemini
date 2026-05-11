@@ -383,6 +383,20 @@ branches. The lesson is the same as the cold-helper split: **do not move
 ultra-hot paths behind calls**, even if the callee is small and the logic
 looks simpler.
 
+#### CE `48` / `MOV B, [X+#ss]` local-read path
+
+Tried changing only `CE 48` to use `MinxCPU_CE_LocalRead` after the Race Mini
+`CE D4` win. It looked plausible because Race diagnostics showed `CE 48`
+inside the hot set, but the change grew `MinxCPU_ExecCE` from about `0x1e0c`
+to `0x1e4a` and one-lap Race Mini fell back into mostly `19.x fps` windows.
+
+Current state: **reverted**.
+
+Likely explanation: `CE 48` is not hot enough, or its address pattern is not
+RAM-local enough, to pay for expanding the already cache-sensitive CE
+dispatcher. The `CE D4` win remains because absolute RAM writes are simpler
+and more predictable.
+
 ### Current game observations
 
 - **Togepi no Daibouken**: biggest beneficiary. ALU+MOV helped; adding
@@ -395,6 +409,126 @@ looks simpler.
   recovered some ground. The failed CE `[X+#ss] -> A` family was clearly bad
   for gameplay despite improving boot.
 
+### Longer opcode-diagnostic runs
+
+These runs use the opcode diagnostic build, so raw fps is lower than normal
+device builds and should not be compared directly. The useful signal is the
+relative opcode mix.
+
+- **Race Mini, three-lap diagnostic**: sustained gameplay stays heavily
+  dominated by `XX E7` / `XX 95`, with `CE` and `CF` as the next important
+  buckets. The steady slow sections repeatedly show `CE 40`, `CE 28`,
+  `CE D0`, `CE D4`, `CE 8D`, `CE 98`, and `CE 48`; `CF B1` / `CF B5`
+  dominate CF, followed by smaller `CF 0B`, `CF E6`, `CF 20`, `CF 19`,
+  `CF EC`, and `CF 42` clusters. The current `CE D0/D4` and `CF B1/B5`
+  work attacks the most stable cross-window targets.
+- **Togepi long diagnostic**: early sections look similar to Race, with
+  `XX E7` / `XX 95` far ahead and `CF B1` / `CF B5` very hot. Later heavy
+  gameplay shifts more work into `CE` / `CF`: common CE leaders are `CE 28`,
+  `CE 40`, `CE D4`, `CE D0`, `CE C5`, `CE D8`, `CE 51`, and `CE 48`;
+  common CF leaders after `B1/B5` are `CF 01`, `CF 00`, `CF 20`, `CF 42`,
+  `CF C1`, and `CF 60`.
+- **Pinball long diagnostic**: confirms the same two-phase shape. Early/menu
+  and lighter gameplay is again dominated by `XX E7` / `XX 95`, while active
+  ball sections push much more work into `CE` and `CF`. Stable CE leaders are
+  `CE 28`, `CE D0`, `CE D4`, `CE 93`, `CE 40`, `CE C5`, `CE D8`, and
+  sometimes `CE 51` / `CE 83`. CF is dominated by `CF B1` / `CF B5`, with
+  `CF 01`, `CF 20`, `CF 42`, `CF C0`, `CF B4`, `CF B0`, and `CF 60`
+  recurring behind them.
+
+Interpretation: the current wins are pointing in the right direction, but the
+next candidate should be chosen from opcodes that recur across Race, Togepi,
+and Pinball. Avoid retrying broad CE families or `XX 95` unless there is a new
+reason; the diagnostics make them tempting, but previous A/B runs showed code
+layout and branch pressure can erase the apparent win.
+
+### CF stack A pair experiment - reverted
+
+After the Race/Togepi/Pinball diagnostic pass, the pure register arithmetic
+candidates (`CF 01`, `CF 20`, `CF 42`) looked risky: the existing cases are
+already tiny, and a new early decode branch would add layout pressure to every
+CF prefix. Instead, the next test extends the proven stack-local fast path from
+`CF B1/B5` to `CF B0/B4` as well. This targets `PUSH A` / `POP A`, which show
+up behind `B1/B5` in Pinball and are especially relevant to other games like
+Tetris/Party Mini.
+
+Implementation: `POKEMINI_COMPACT_CF_STACK_B` became
+`POKEMINI_COMPACT_CF_STACK_AB`. `B0`, `B1`, `B4`, and `B5` now use the same
+Playdate-only direct stack RAM path with fallback. Normal device build size:
+`MinxCPU_ExecCF` is about `0x0ea0`, up from the previous `B`-only keeper
+around `0x0e68`.
+
+Race Mini caught the regression immediately: despite a slightly shorter menu
+segment, the steady one-lap section fell back into roughly `18.4-19.2 fps`
+windows instead of the keeper's roughly `20 fps` range. Current state:
+**reverted to `CF B1/B5` only**. Likely explanation: `CF B0/B4` were not hot
+enough in Race to pay for the extra CF dispatcher growth, even though they
+showed up in Pinball/Tetris-like traces.
+
+### CE/CF prefix timing diagnostic
+
+After the `CF B0/B4` failure, the next diagnostic build extends
+`PD_PERF_DIAG` with prefix-handler timing. The normal phase line now includes
+`ce=` and `cf=` fields:
+
+```text
+diag: upd=30 pm=72 total=...us emu=... cpu=... ce=... cf=... tim=... prc=... aud=... input=... render=... misc=...
+```
+
+The `ce` and `cf` values are measured around top-level `XX CE` and `XX CF`
+calls inside `MinxCPU_Exec()`. They are included inside the broader `cpu=`
+time, not additional time. Use this build only to decide whether prefix
+handlers are worth optimizing further; the extra `getElapsedTime()` calls add
+overhead and make raw fps unsuitable for A/B comparisons.
+
+Race Mini result: once in sustained gameplay, typical 30-update windows were
+roughly:
+
+- `total`: `2.68-2.83s`
+- `emu`: `2.66-2.81s`
+- `cpu`: `2.20-2.35s`
+- `ce`: `0.43-0.48s`
+- `cf`: `0.22-0.24s`
+- `tim`: `0.16-0.17s`
+- `prc`: `0.20s`
+- `render`: `0.016-0.018s`
+
+Interpretation: `CE`/`CF` are meaningful, but not the whole CPU cost. In this
+instrumented build, `CE` is about 20% of CPU time and `CF` about 10%; combined
+they are around 30% of CPU time. Absolute values are inflated because the
+measurement itself calls the Playdate timer around every prefix. The relative
+shape still matters: `CE` is the larger prefix target, while the remaining
+non-prefix top-level stream is still the biggest bucket overall. This argues
+against more broad CF stack/layout experiments and for either a very narrow CE
+single-op test or a return to top-level layout work with careful A/B.
+
+### CE `93` local read-modify-write experiment
+
+Next narrow CE test after the prefix timing diagnostic: `CE 93` / `ROLC [HL]`
+used `MinxCPU_CE_LocalRead()` and `MinxCPU_CE_LocalWrite()` behind
+`POKEMINI_CE_93_LOCAL_RMW`. This was deliberately a single-opcode experiment:
+`CE 93` appears in Race and Pinball diagnostic windows, performs a memory
+read-modify-write, and does not need a new top-level dispatcher branch.
+
+Race Mini one-lap result: no correctness issue, but no keeper-level win. The
+steady section stayed mostly in the high-18s to high-19s fps band, while
+`MinxCPU_ExecCE` grew from about `0x1e0c` to `0x1e60`. Current state:
+**reverted**. Lesson: even a local single-op CE RMW fast path can lose if it
+adds enough CE dispatcher size; keep future CE tests either smaller or clearly
+hotter than `CE 93`.
+
+### Linker hot-dispatcher offset sweep
+
+After the CE single-op tests started losing mostly through code-size/layout
+pressure, the next experiment follows the Playdate "performance lottery"
+advice more directly: keep code identical and move the hot dispatcher within
+the aligned linker page. First test adds `0x80` bytes after the initial
+`ALIGN(0x1000)` in `link_map.ld`, before `.text.hot.exec`.
+
+This is intentionally a pure layout A/B. No opcode logic changes, diagnostics
+off. Race Mini one-lap is the first test target because it is currently the
+most sensitive workload.
+
 ### Guidance for next performance work
 
 - Keep the current good stack as the baseline.
@@ -403,8 +537,8 @@ looks simpler.
 - Prefer tiny, isolated CE/CF changes over broad decoded CE dispatch.
 - For Race Mini specifically, the current profitable direction is narrow
   memory-path specialization in already-hot cases (`CF B1/B5`, `CE D4`,
-  maybe one opcode at a time like `CE 48`) rather than new top-level decode
-  gates.
+  and `CE D0/D4` direct paths) rather than new top-level decode gates. `CE 48`
+  was tried and reverted.
 - If optimizing CE again, consider one hot opcode or a very small family at a
   time, with a checker and a rollback plan.
 - Re-run at least Togepi, Tetris, and Pinball after any dispatcher-layout

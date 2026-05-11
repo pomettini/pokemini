@@ -469,7 +469,7 @@ POKEMINI_HOT int MinxCPU_ExecCE(void)
 		case 0x48: // MOV B, [X+#ss]
 			I8A = Fetch8();
 			I16 = MinxCPU.X.W.L + S8_TO_16(I8A);
-			MinxCPU.BA.B.H = MinxCPU_CE_LocalRead((MinxCPU.X.B.I << 16) | I16);
+			MinxCPU.BA.B.H = MinxCPU_OnRead(1, (MinxCPU.X.B.I << 16) | I16);
 			return 16;
 		case 0x49: // MOV B, [Y+#ss]
 			I8A = Fetch8();
