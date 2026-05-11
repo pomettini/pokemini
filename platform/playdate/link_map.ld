@@ -30,7 +30,7 @@ SECTIONS
 		 * line boundary.
 		 */
 		. = ALIGN(0x1000);
-		. += 0x80;
+		. += 0x140;
 		*(.text.hot.exec)
 		. = ALIGN(32);
 		*(.text.hot*)

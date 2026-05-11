@@ -529,6 +529,61 @@ This is intentionally a pure layout A/B. No opcode logic changes, diagnostics
 off. Race Mini one-lap is the first test target because it is currently the
 most sensitive workload.
 
+Race Mini one-lap result for `0x80`: clear improvement. Compared with the
+18:50 keeper/baseline build, the slow steady section moved from mostly
+`19.x fps` windows into mostly `20.5-21.6 fps`, with the early/mid sections
+also feeling noticeably smoother on device. The only code change was:
+
+```ld
+. = ALIGN(0x1000);
+. += 0x80;
+*(.text.hot.exec)
+```
+
+`MinxCPU_Exec` moved from `0x00000000` to `0x00000080`. Function sizes stayed
+unchanged (`Exec=0x12b8`, `CE=0x1e0c`, `CF=0x0e68`), and the package remained
+device-only with diagnostics off. This strongly supports the Playdate forum
+thread's cache-line / branch-predictor "performance lottery" explanation: on
+Rev A, identical code at a different address can produce a large emulator
+speed delta.
+
+Current state: `0x80` is the provisional best layout offset. Next best move is
+to sweep a few nearby offsets without changing any C code, using Race Mini
+one-lap as the first-pass judge. Suggested order: `0x40`, `0xC0`, `0x100`,
+then optionally `0x20` / `0x60` / `0xA0` if the curve looks noisy.
+
+Sweep build 1 after the `0x80` win: `0x40` offset. This should be compared
+against the `0x80` build and the 18:50 keeper/baseline, not against any CE
+single-op experiment.
+
+Race Mini one-lap result for `0x40`: also a strong layout win. The steady
+section stayed mostly around `20.6-21.6 fps`, similar to `0x80`, and the
+early/mid section had several high-20s windows. `0x40` and `0x80` are both
+well above the 18:50 keeper/baseline in Race; continue the sweep before
+choosing between them.
+
+Race Mini one-lap result for `0xC0`: another strong result, with the later
+steady section often at `21.0-21.8 fps` and no obvious downside versus
+`0x40`/`0x80`. This suggests the good region may extend across much of
+`0x40-0xC0`; test `0x100` next before doing a finer sweep.
+
+Race Mini one-lap result for `0x100`: still strong. Early/mid sections again
+hit many high-20s windows, and the later steady section stayed mostly in the
+`20.7-21.8 fps` range. This confirms the good layout region extends at least
+through `0x100`. Next fine-sweep point: `0xE0`, between the strong `0xC0` and
+`0x100` builds.
+
+Race Mini one-lap result for `0xE0`: regression versus the strong
+`0xC0`/`0x100` builds. The later steady section fell back to mostly
+`19.4-20.4 fps`, despite `0xE0` sitting between two good offsets and using the
+same code/sizes (`Exec=0x12b8`, `CE=0x1e0c`, `CF=0x0e68`). Important clue:
+the good tested offsets (`0x40`, `0x80`, `0xC0`, `0x100`) are all multiples of
+`0x40`, while `0xE0` is `0x20` off that grid. Treat 64-byte placement as a
+likely factor and prefer the next `0x40`-multiple (`0x140`) over more half-step
+tests for now.
+
+Sweep build pending test: `0x140` offset. Pure linker-layout change only.
+
 ### Guidance for next performance work
 
 - Keep the current good stack as the baseline.
