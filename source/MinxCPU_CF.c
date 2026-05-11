@@ -21,6 +21,10 @@
 #include "PokeMini.h"
 #include "MinxCPU.h"
 
+#if defined(TARGET_PLAYDATE) && !(defined(POKEMINI_COMPUTED_GOTO) && defined(__GNUC__))
+#define POKEMINI_COMPACT_CF_STACK_B
+#endif
+
 #if defined(POKEMINI_CPU_FASTMEM) && defined(PERFORMANCE)
 #define MinxCPU_OnRead MinxCPU_FastRead
 #define MinxCPU_OnWrite MinxCPU_FastWrite
@@ -40,6 +44,25 @@ static inline __attribute__((always_inline)) uint8_t MinxCPU_CF_LocalRead(uint32
 	}
 	return 0xFF;
 }
+
+#ifdef POKEMINI_COMPACT_CF_STACK_B
+static inline __attribute__((always_inline)) uint8_t MinxCPU_CF_LocalStackRead(uint32_t addr)
+{
+	if ((addr >= 0x1300) && (addr < 0x2000)) {
+		return PM_RAM[addr - 0x1000];
+	}
+	return MinxCPU_OnRead(1, addr);
+}
+
+static inline __attribute__((always_inline)) void MinxCPU_CF_LocalWrite(uint32_t addr, uint8_t data)
+{
+	if ((addr >= 0x1300) && (addr < 0x2000)) {
+		PM_RAM[addr - 0x1000] = data;
+	} else {
+		MinxCPU_OnWrite(1, addr, data);
+	}
+}
+#endif
 
 #else
 #define MinxCPU_CF_LocalRead(addr) MinxCPU_OnRead(1, addr)
@@ -514,7 +537,12 @@ POKEMINI_HOT int MinxCPU_ExecCF(void)
 			PUSH(MinxCPU.BA.B.L);
 			return 12;
 		case 0xB1: // PUSH B
+#ifdef POKEMINI_COMPACT_CF_STACK_B
+			MinxCPU.SP.W.L--;
+			MinxCPU_CF_LocalWrite(MinxCPU.SP.D, MinxCPU.BA.B.H);
+#else
 			PUSH(MinxCPU.BA.B.H);
+#endif
 			return 12;
 		case 0xB2: // PUSH L
 			PUSH(MinxCPU.HL.B.L);
@@ -527,7 +555,11 @@ POKEMINI_HOT int MinxCPU_ExecCF(void)
 			MinxCPU.BA.B.L = POP();
 			return 12;
 		case 0xB5: // POP B
+#ifdef POKEMINI_COMPACT_CF_STACK_B
+			MinxCPU.BA.B.H = MinxCPU_CF_LocalStackRead(MinxCPU.SP.D);
+#else
 			MinxCPU.BA.B.H = MinxCPU_CF_LocalRead(MinxCPU.SP.D);
+#endif
 			MinxCPU.SP.W.L++;
 			return 12;
 		case 0xB6: // POP L

@@ -35,6 +35,9 @@ project(${PLAYDATE_GAME_NAME} C ASM)
 
 set(POKEMINI_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../..)
 
+option(PD_OPCODE_DIAG_BUILD "Count Minx opcode frequency on device" OFF)
+option(PD_PERF_DIAG_BUILD "Measure Playdate update phase timings on device" OFF)
+
 set(GAME_SOURCES
     PokeMini_Playdate.c
     ${POKEMINI_ROOT}/freebios/freebios.c
@@ -92,6 +95,14 @@ target_compile_definitions(${TARGET_NAME} PRIVATE
     SIMPLE_CONTROLS
 )
 
+if (PD_OPCODE_DIAG_BUILD)
+    target_compile_definitions(${TARGET_NAME} PRIVATE PD_OPCODE_DIAG)
+endif()
+
+if (PD_PERF_DIAG_BUILD)
+    target_compile_definitions(${TARGET_NAME} PRIVATE PD_PERF_DIAG)
+endif()
+
 if (TOOLCHAIN STREQUAL "armgcc")
     target_link_options(${TARGET_NAME} PRIVATE --specs=nosys.specs)
     # -Os over -O3: the M7 Rev A has only a 4 KB I-cache, so PokeMini's
@@ -138,4 +149,14 @@ if (TOOLCHAIN STREQUAL "armgcc")
         LINK_OPTIONS "${_pd_link_opts}")
     target_link_options(${TARGET_NAME} PRIVATE
         -T${CMAKE_CURRENT_SOURCE_DIR}/link_map.ld)
+
+    # Device-only packages do not need the simulator dylib. If a simulator
+    # build left Source/pdex.dylib behind, pdc would otherwise copy it into
+    # PokeMini.pdx as an unknown file.
+    add_custom_command(TARGET ${TARGET_NAME} PRE_LINK
+        COMMAND ${CMAKE_COMMAND} -E rm -f
+            ${CMAKE_CURRENT_SOURCE_DIR}/Source/pdex.dylib)
+    add_custom_command(TARGET ${TARGET_NAME} POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E rm -f
+            ${CMAKE_CURRENT_SOURCE_DIR}/${PLAYDATE_GAME_DEVICE}.pdx/pdex.dylib)
 endif()

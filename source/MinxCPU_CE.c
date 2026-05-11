@@ -44,8 +44,18 @@ static inline __attribute__((always_inline)) uint8_t MinxCPU_CE_LocalRead(uint32
 	}
 	return 0xFF;
 }
+
+static inline __attribute__((always_inline)) void MinxCPU_CE_LocalWrite(uint32_t addr, uint8_t data)
+{
+	if ((addr >= 0x1000) && (addr < 0x2000)) {
+		PM_RAM[addr - 0x1000] = data;
+	} else {
+		MinxCPU_OnWrite(1, addr, data);
+	}
+}
 #else
 #define MinxCPU_CE_LocalRead(addr) MinxCPU_OnRead(1, addr)
+#define MinxCPU_CE_LocalWrite(addr, data) MinxCPU_OnWrite(1, addr, data)
 #endif
 
 POKEMINI_HOT int MinxCPU_ExecCE(void)
@@ -103,39 +113,31 @@ POKEMINI_HOT int MinxCPU_ExecCE(void)
 	if ((MinxCPU.IR & 0xF8) == 0xD0) {
 		I8A = MinxCPU.IR;
 		I16 = Fetch16();
-		if ((I8A & 0x04) == 0) {
-			uint8_t I8B = (I8A == 0xD0) ? MinxCPU_CE_LocalRead(I16) : MinxCPU_OnRead(1, I16);
-			switch (I8A & 0x03) {
-			case 0x00:
-				MinxCPU.BA.B.L = I8B;
-				break;
-			case 0x01:
-				MinxCPU.BA.B.H = I8B;
-				break;
-			case 0x02:
-				MinxCPU.HL.B.L = I8B;
-				break;
-			default:
-				MinxCPU.HL.B.H = I8B;
-				break;
-			}
-		} else {
-			uint8_t I8B;
-			switch (I8A & 0x03) {
-			case 0x00:
-				I8B = MinxCPU.BA.B.L;
-				break;
-			case 0x01:
-				I8B = MinxCPU.BA.B.H;
-				break;
-			case 0x02:
-				I8B = MinxCPU.HL.B.L;
-				break;
-			default:
-				I8B = MinxCPU.HL.B.H;
-				break;
-			}
-			MinxCPU_OnWrite(1, I16, I8B);
+		switch (I8A) {
+		case 0xD0:
+			MinxCPU.BA.B.L = MinxCPU_CE_LocalRead(I16);
+			break;
+		case 0xD1:
+			MinxCPU.BA.B.H = MinxCPU_OnRead(1, I16);
+			break;
+		case 0xD2:
+			MinxCPU.HL.B.L = MinxCPU_OnRead(1, I16);
+			break;
+		case 0xD3:
+			MinxCPU.HL.B.H = MinxCPU_OnRead(1, I16);
+			break;
+		case 0xD4:
+			MinxCPU_CE_LocalWrite(I16, MinxCPU.BA.B.L);
+			break;
+		case 0xD5:
+			MinxCPU_OnWrite(1, I16, MinxCPU.BA.B.H);
+			break;
+		case 0xD6:
+			MinxCPU_OnWrite(1, I16, MinxCPU.HL.B.L);
+			break;
+		default:
+			MinxCPU_OnWrite(1, I16, MinxCPU.HL.B.H);
+			break;
 		}
 		return 20;
 	}
@@ -467,7 +469,7 @@ POKEMINI_HOT int MinxCPU_ExecCE(void)
 		case 0x48: // MOV B, [X+#ss]
 			I8A = Fetch8();
 			I16 = MinxCPU.X.W.L + S8_TO_16(I8A);
-			MinxCPU.BA.B.H = MinxCPU_OnRead(1, (MinxCPU.X.B.I << 16) | I16);
+			MinxCPU.BA.B.H = MinxCPU_CE_LocalRead((MinxCPU.X.B.I << 16) | I16);
 			return 16;
 		case 0x49: // MOV B, [Y+#ss]
 			I8A = Fetch8();

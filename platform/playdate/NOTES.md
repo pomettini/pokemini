@@ -29,6 +29,21 @@ Sideload that `.pdx` to the Playdate.
 silently if it's unset (this user's shell rc doesn't export it; the sim
 build can fall back via `~/.Playdate/config`, but the device build can't).
 
+Diagnostic variants are controlled by CMake cache flags, then rebuilt with
+the same device build command:
+
+```
+cmake -S . -B build-device -DPD_OPCODE_DIAG_BUILD=ON
+cmake --build build-device
+```
+
+Turn it back off before making performance `.pdx` files:
+
+```
+cmake -S . -B build-device -DPD_OPCODE_DIAG_BUILD=OFF
+cmake --build build-device
+```
+
 ### Sim build (optional, desktop dev convenience)
 
 ```
@@ -247,7 +262,41 @@ Keep these enabled for now:
 - **Compact CE absolute MOV `D0-D7`**
   (`POKEMINI_COMPACT_CE_ABS_MOV`). Targets hot `CE D0` / `CE D4` patterns.
   It is safe and gave a modest Tetris recovery after the short-jump change.
-  `MinxCPU_ExecCE` sits around `0x1de6` with this enabled.
+  `MinxCPU_ExecCE` sat around `0x1de6` with the first version enabled.
+- **CF stack B pair `B1/B5`** (`POKEMINI_COMPACT_CF_STACK_B`). Race Mini
+  showed `CF B1` / `CF B5` as the dominant CF opcodes. Special-casing only
+  `PUSH B` / `POP B` stack access with a RAM-window direct path was small,
+  safe, and modestly improved Race Mini's slow sections. Keep for now.
+- **CE absolute `D4` local write + `D0/D4` direct paths**. Race Mini showed
+  `CE D0` / `CE D4` hot. A narrow local-write path for `CE D4`
+  (`MOV [#nnnn], A`) moved Race steady-state from mostly ~19.2-20.0 fps to
+  mostly ~20.2-20.7 fps. Specializing the `D0-D7` compact block so hot
+  `D0` and `D4` bypass nested register-selection switches was neutral to
+  slightly positive and did not meaningfully grow `MinxCPU_ExecCE`
+  (`~0x1e0c`).
+
+### Memory benchmark implications
+
+The user shared a Rev B memory benchmark showing a huge gap between
+sequential RAM/DTCM and scattered byte RAM access. Key qualitative takeaway:
+**random/scattered byte access to normal RAM is extremely expensive on
+Playdate**, and Rev A is reportedly much slower than Rev B. This matches
+our device data: Race Mini and other heavy scenes bottleneck on emulated CPU
+memory traffic, not rendering.
+
+Implications for future work:
+
+- Prefer direct PM RAM fast paths only where the address class is already
+  strongly implied (stack window, absolute RAM writes, proven hot local RAM
+  reads). Broad memory-dispatch rewrites can lose by adding branches and
+  expanding hot code.
+- Stack-specific helpers are promising because PM stack traffic is clustered
+  and predictable.
+- Full DTCM/ITCM placement may still be the biggest remaining hardware-level
+  lever, but it needs careful linker/runtime work. Do not assume ordinary
+  heap/static RAM is "fast enough" for scattered byte-heavy emulator paths.
+- The benchmark supports optimizing for locality and fewer unpredictable
+  branches as much as for raw instruction count.
 
 ### Important failed experiments
 
@@ -299,8 +348,40 @@ Likely explanation:
 - Smaller code was not faster here: extra branches, more live temporaries,
   and worse layout likely outweighed the saved cases.
 
+#### XX `95` / `TST [HL], #nn` fast path
+
+Race Mini diagnostics showed steady gameplay dominated by `E7` and `95`, so
+a narrow Playdate-only path for `XX 95` was tried after the compact short
+jump path. The host checker passed, but `MinxCPU_Exec` grew from about
+`0x12b8` to `0x12fa` and one-lap Race Mini gameplay dropped from roughly
+`19-20 fps` windows to mostly `18-19 fps`.
+
+Current state: **runtime macro disabled**. The checker remains in `tools/`
+for reference.
+
+Likely explanation: the instruction itself is too small to justify adding
+another hot-path branch to the top-level dispatcher. `E7` is even hotter than
+`95` in Race Mini, and although the `95` check was ordered after `E7`, the
+extra code still expanded the hot dispatcher enough to hurt I-cache behavior.
+
 Lesson: **symbol size is not the metric; device logs are**. A compact path
 must improve the real phase we care about, not only shrink the function.
+
+#### Shared instruction-fetch helper
+
+Tried replacing `Fetch8()`'s generic `MINXCPU_READ(1, addr)` with a shared
+Playdate-only `MinxCPU_FetchRead(addr)` that fast-pathed ROM/BIOS fetches
+and fell back for RAM/I/O. The helper was tiny (~0x3c bytes) and looked
+attractive because instruction fetch is the hottest memory read in the CPU.
+
+Result: Race Mini regressed badly, with steady gameplay falling to roughly
+15 fps. Reverted.
+
+Likely explanation: because the helper was a real call on every opcode and
+immediate fetch, call overhead plus I-cache pressure overwhelmed the saved
+branches. The lesson is the same as the cold-helper split: **do not move
+ultra-hot paths behind calls**, even if the callee is small and the logic
+looks simpler.
 
 ### Current game observations
 
@@ -320,6 +401,10 @@ must improve the real phase we care about, not only shrink the function.
 - Do not re-enable `POKEMINI_COMPACT_CE_XSHORT_A` without a specific A/B
   reason.
 - Prefer tiny, isolated CE/CF changes over broad decoded CE dispatch.
+- For Race Mini specifically, the current profitable direction is narrow
+  memory-path specialization in already-hot cases (`CF B1/B5`, `CE D4`,
+  maybe one opcode at a time like `CE 48`) rather than new top-level decode
+  gates.
 - If optimizing CE again, consider one hot opcode or a very small family at a
   time, with a checker and a rollback plan.
 - Re-run at least Togepi, Tetris, and Pinball after any dispatcher-layout

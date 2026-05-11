@@ -288,6 +288,14 @@ POKEMINI_HOT_EXEC int MinxCPU_Exec(void)
 	}
 #endif
 
+#ifdef POKEMINI_COMPACT_XX_TST_HL_IMM
+	if (MinxCPU.IR == 0x95) {
+		I8A = Fetch8();
+		AND8(MinxCPU_XX_LocalRead(MinxCPU.HL.D), I8A);
+		return 12;
+	}
+#endif
+
 	// Process instruction
 #if defined(POKEMINI_COMPUTED_GOTO) && defined(__GNUC__)
 #define OP(n) op_##n:
@@ -1064,10 +1072,12 @@ POKEMINI_HOT_EXEC int MinxCPU_Exec(void)
 		OP(94) // TST A, B
 			AND8(MinxCPU.BA.B.L, MinxCPU.BA.B.H);
 			return 8;
+#ifndef POKEMINI_COMPACT_XX_TST_HL_IMM
 		OP(95) // TST [HL], #nn
 			I8A = Fetch8();
 			AND8(MinxCPU_OnRead(1, MinxCPU.HL.D), I8A);
 			return 12;
+#endif
 		OP(96) // TST A, #nn
 			I8A = Fetch8();
 			AND8(MinxCPU.BA.B.L, I8A);
