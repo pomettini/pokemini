@@ -633,6 +633,44 @@ sections still hit high-20s windows, and the heavier steady section mostly sat
 around `20.1-21.1 fps`. Treat the audio-output activation as part of the keeper
 stack, not as a temporary diagnostic.
 
+Single-op `CE 28` (`OR A, [X+#ss]`) local-read experiment: reverted. The test
+changed only that opcode from `MinxCPU_OnRead()` to `MinxCPU_CE_LocalRead()`.
+Build impact was small but not free: `MinxCPU_ExecCE` grew from `0x1e0c` to
+`0x1e48`. Race Mini one-lap regressed clearly, with the heavy steady section
+mostly around `19.1-19.9 fps` instead of the keeper's `20.1-21.1 fps` band.
+Lesson: even a one-op local-read substitution can lose if it grows/moves CE
+enough; do not retry `CE 28` without a different layout strategy.
+
+Post-`Exec` hot-section padding test: code-identical layout probe. Keep
+`MinxCPU_Exec` pinned at the proven `0x140` address, then add `0x28` bytes
+after it before the remaining `.text.hot*` sections. Expected effect:
+`MinxCPU_OnRead`, `MinxCPU_OnWrite`, `MinxCPU_ExecCE`, `MinxCPU_ExecCF`, and
+the following hot sync functions all shift effectively by `0x30` after
+function alignment; `MinxCPU_ExecCE` moves from `0x1698` to `0x16c8` without
+changing function sizes. This tests whether CE/CF cache/branch placement is
+part of Race Mini's remaining gap, without repeating the riskier
+opcode-local-read edits. Result: reverted. Race Mini one-lap fell back into
+mostly `19.0-19.9 fps` in the heavy section, worse than the audio-fixed
+`0x140` keeper's `20.x-21.x fps` band. Lesson: the good `MinxCPU_Exec`
+placement is not enough by itself; the following `OnRead`/`OnWrite`/CE/CF
+placement also matters, and shifting that block by `+0x30` is hostile.
+
+Playdate-only framebuffer-hook skip in the active CPU write path: test build.
+For device builds, `MinxCPU_OnWrite()` now writes `0x1000-0x12ff` RAM directly
+without checking `PRCColorMap`; non-Playdate builds keep the color-PRC hook.
+Playdate does not use the color PRC path, and Race Mini is memory-write heavy
+enough that removing this hot branch may help. `MinxCPU_FastWrite()` was first
+patched by mistake, but that helper is not compiled in the current keeper
+build, so the active test is the `MinxCPU_OnWrite()` change. Compare against
+the audio-fixed `0x140` keeper with Race Mini one-lap first. Build note:
+removing the branch shrinks `MinxCPU_OnWrite` from `0x158` to `0x13c`; add
+`0x1c` linker padding after `Hardware.c.obj(.text.hot*)` so `MinxCPU_ExecCE`
+and `MinxCPU_ExecCF` stay at the keeper addresses (`0x1698` / `0x34a4`).
+Result: reverted. Race Mini one-lap did not improve; the sustained heavy
+section sat mostly around `19.6-20.1 fps`, slightly below the keeper's usual
+`20.3-21.1 fps` band. The branch removal is not valuable enough on device,
+and the color-PRC hook stays in place.
+
 ### Guidance for next performance work
 
 - Keep the current good stack as the baseline.
