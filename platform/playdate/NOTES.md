@@ -6,6 +6,31 @@ non-obvious is discovered. Newest entries on top.
 
 ## Build commands
 
+### Canonical device performance build
+
+Use this for normal on-device performance testing. This is the configuration
+Codex has been using for the keeper builds:
+
+```
+cmake -S . -B build-device \
+    -DTOOLCHAIN=armgcc \
+    -DCMAKE_TOOLCHAIN_FILE=$PLAYDATE_SDK_PATH/C_API/buildsupport/arm.cmake \
+    -DPD_OPCODE_DIAG_BUILD=OFF \
+    -DPD_PERF_DIAG_BUILD=OFF
+cmake --build build-device --clean-first
+```
+
+Expected package contents:
+
+```
+PokeMini.pdx/LICENSE
+PokeMini.pdx/pdxinfo
+PokeMini.pdx/pdex.bin
+```
+
+If `PokeMini.pdx/pdex.dylib` is present, that is the simulator binary and the
+package is not the clean device-only test artifact.
+
 The only artifact that ships is **`PokeMini.pdx`**. Both build branches
 (device and sim) produce a `.pdx` with that exact name — they're meant
 to be alternatives, not coexist. The device build is the canonical one;
