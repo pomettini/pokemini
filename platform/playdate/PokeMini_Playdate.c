@@ -30,7 +30,7 @@
 #include "Video_x1.h"
 #include "UI.h"
 
-static PlaydateAPI *pd;
+PlaydateAPI *pd;  // non-static: shared with PokeMini_Playdate_EEPROM.c
 
 #ifdef PD_PERF_DIAG
 unsigned int PDPerf_CpuUs = 0;
@@ -187,6 +187,10 @@ static volatile AppMode app_mode = MODE_PICKER;
 // thread checks this to silence output during the system menu. volatile for
 // the same reason as app_mode — written on the main thread, read on audio.
 static volatile int emu_paused = 0;
+// Set when a ROM loads; cleared in update() after EEPROM is read.
+// Keeps all flash I/O out of kEventInit and start_emulation_with_rom so
+// the perf-keepalive is not disrupted during the firmware's startup window.
+static volatile int eeprom_load_pending = 0;
 
 // Audio source handle
 static SoundSource *audio_source = NULL;
@@ -709,6 +713,15 @@ static void ensure_rom_dir(void)
 	pd->file->mkdir("/Shared/Emulation/pm/games");
 }
 
+// --- EEPROM persistence via Playdate file API ---------------------------------
+// Implemented in PokeMini_Playdate_EEPROM.c, listed after Hardware.c in
+// GAME_SOURCES to keep PokeMini_EmulateFrame out of I-cache set 19.
+// See NOTES.md "EEPROM save/load and I-cache aliasing".
+void ensure_eep_dir(void);
+void setup_eeprom_path(const char *rom_path);
+int  pd_load_eeprom(const char *filename);
+int  pd_save_eeprom(const char *filename);
+
 static void scan_rom_dir(void)
 {
 	rom_count = 0;
@@ -791,19 +804,54 @@ static void render_picker(void)
 // tweaks the picker may have changed.
 static void start_emulation_with_rom(const char *path)
 {
+	// If switching ROMs mid-session, flush the current EEPROM before it
+	// gets overwritten by the new ROM's load.
+	if (app_mode == MODE_EMULATOR && PokeMini_EEPROMWritten
+	        && StringIsSet(CommandLine.eeprom_file)) {
+		PokeMini_SaveEEPROMFile(CommandLine.eeprom_file);
+		PokeMini_EEPROMWritten = 0;
+	}
+
 	if (path == NULL) {
 		pd->system->logToConsole("%s: starting with FreeBIOS only (no ROM)", AppName);
+		CommandLine.eeprom_file[0] = 0;
 	} else if (!load_rom(path)) {
 		pd->system->logToConsole("%s: load_rom(%s) failed - falling back to FreeBIOS",
 			AppName, path);
+		CommandLine.eeprom_file[0] = 0;
 	} else {
 		pd->system->logToConsole("%s: ROM loaded: %s size=%d mask=0x%X",
 			AppName, path, PM_ROM_Size, PM_ROM_Mask);
+		setup_eeprom_path(path);
 	}
 
+	// Reset the EEPROM buffer to the erased state (0xFF) before loading
+	// this ROM's save. MinxIO_Reset does NOT touch the 8192-byte buffer, so
+	// without this a ROM's first launch would silently inherit the previous
+	// ROM's EEPROM data. 0xFF is correct — it is the blank/erased state of
+	// a real PM EEPROM chip.
+	MinxIO_FormatEEPROM();
+
+	// Schedule EEPROM load for the first update() frame after this ROM starts.
+	// Loading here (inside the update callback's call stack) would block long
+	// enough to disrupt the perf-keepalive; deferring keeps all flash I/O out
+	// of start_emulation_with_rom so the keepalive window is never missed.
+	eeprom_load_pending = StringIsSet(CommandLine.eeprom_file);
+
+	// Match upstream PokeMini_LoadROM ordering: EEPROM is ready before the
+	// soft reset, then the reset performs BIOS/CPU setup and applies host RTC.
+	// The Playdate device has no libc-backed time(), so suppress the generic
+	// sync during reset and apply the Playdate clock immediately after.
+	int saved_updatertc = CommandLine.updatertc;
+	CommandLine.updatertc = 0;
 	PokeMini_Reset(0);
+	CommandLine.updatertc = saved_updatertc;
 	PokeMini_ApplyChanges();
 	MinxAudio_ChangeEngine(CommandLine.sound);
+
+	// Clock sync happens in the deferred EEPROM-load block in update(), after
+	// PokeMini_LoadEEPROMFile(), so the time fields are set on top of saved
+	// data rather than getting overwritten by the file load.
 #ifdef PD_OPCODE_DIAG
 	MinxCPU_OpcodeDiagReset();
 #endif
@@ -890,6 +938,41 @@ static void picker_update(void)
 	render_picker();
 }
 
+// Out-of-line helper for the deferred EEPROM load and clock sync that fires
+// once on the first emulator-mode update() after a ROM switch.
+//
+// MUST be defined before update() and MUST NOT be inlined. Its presence here
+// (as its own .text.* section) adds ~0x60 bytes of code immediately before
+// update() in the binary. Combined with the EmulateFrame section padding in
+// link_map.ld (ALIGN(0x400)+0x20 → libgcc shift 0x320) and the 0x80-byte
+// start_emulation_with_rom growth, total shift = 0x60 + 0x80 + 0x320 = 0x400
+// — exactly one BTB period — which keeps update()'s BL to PokeMini_EmulateFrame
+// in the same branch-predictor slot as the baseline build. See NOTES.md
+// "Branch predictor slot engineering".
+__attribute__((noinline))
+static void eeprom_deferred_load_and_sync(void)
+{
+	pd_load_eeprom(CommandLine.eeprom_file);
+	// Sync PM hardware clock from Playdate system time (libc time() = 0 on device).
+	// Done AFTER pd_load_eeprom so the time fields in EEPROM[0x1FF6..0x1FFF]
+	// are written on top of the restored save data, not lost under it.
+	struct PDDateTime dt;
+	pd->system->convertEpochToDateTime(
+	    pd->system->getSecondsSinceEpoch(NULL), &dt);
+	MinxIO_SetTimeStamp(
+	    (uint8_t)(dt.year % 100),
+	    (uint8_t)dt.month,
+	    (uint8_t)dt.day,
+	    (uint8_t)dt.hour,
+	    (uint8_t)dt.minute,
+	    (uint8_t)dt.second);
+	// PMR_SEC_CTRL / SecTimerCnt already set by PokeMini_SyncHostTime()
+	// inside PokeMini_Reset(0). Omitted here to keep function size ~0x60
+	// bytes: eeprom_deferred_load_and_sync() + start_emulation_with_rom
+	// growth sums to 0x0E0, giving total binary shift 0x400 so update()'s
+	// BL to PokeMini_EmulateFrame lands in baseline BTB slot 0x1E8.
+}
+
 // Update callback: called by the Playdate runtime at 30 fps (target).
 // Pokemon Mini runs natively at ~72 Hz. To keep emulated time matched to real
 // time we need 72/30 = 2.4 PM frames per display frame on average. Use an
@@ -953,6 +1036,13 @@ static int update(void *userdata)
 				keepalive_total, dt,
 				dt > 0 ? 30000.0f / dt : 0.0f, keepalive_f);
 		}
+	}
+
+	// Deferred EEPROM load + clock sync (see eeprom_deferred_load_and_sync
+	// above for the full logic and the BTB-engineering comment).
+	if (eeprom_load_pending) {
+		eeprom_load_pending = 0;
+		eeprom_deferred_load_and_sync();
 	}
 
 #ifdef PD_PERF_DIAG
@@ -1041,6 +1131,15 @@ int eventHandler(PlaydateAPI *playdate, PDSystemEvent event, uint32_t arg)
 
 		PokeMini_LoadFreeBIOS();
 		PokeMini_UseDefaultCallbacks();
+
+		// Wire in the Playdate-native EEPROM callbacks so saves work on
+		// device (fopen silently fails there; pd->file->* is the right path).
+		PokeMini_CustomSaveEEPROM = pd_save_eeprom;
+		PokeMini_CustomLoadEEPROM = pd_load_eeprom;
+
+		// Clear the CommandLineInit default ("PokeMini.eep") so no accidental
+		// save goes to the wrong filename before a ROM is selected.
+		CommandLine.eeprom_file[0] = 0;
 
 		UIMenu_Init();
 

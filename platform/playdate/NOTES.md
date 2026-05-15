@@ -4,6 +4,150 @@ Living document of bugs found, fixes applied, and gotchas learned while porting
 the PokeMini emulator to the Playdate. Update this whenever something
 non-obvious is discovered. Newest entries on top.
 
+## Branch predictor slot engineering for EEPROM build (2026-05-15)
+
+The I-cache set fix (pinning `PokeMini_EmulateFrame` at set 1 via
+`.text.emulate_frame`) recovered 3 fps (22→25) but left a persistent 2-3 fps
+gap vs baseline (28 fps). Analysis of the Playdate forum thread
+("Dirty optimization secrets") and the NOTES on Codex's 0x140 sweep revealed
+the missing piece: **branch predictor table aliasing**.
+
+The BTB on Cortex-M7 Rev A holds ~1024 entries indexed by instruction address
+mod 0x400. Two `BL` instructions at the same mod-0x400 slot compete for the
+same entry; if one of them aliases a hot `MinxCPU_Exec` internal branch (the
+256-case switch fires many times per PM cycle), every hit causes a
+misprediction and a pipeline flush.
+
+**Baseline:** `update` starts at 0x6034. The `BL PokeMini_EmulateFrame`
+inside the frame loop is at approximately 0x6034 + 0x5B4 = 0x65E8. Slot:
+0x65E8 mod 0x400 = **0x1E8**.
+
+**EEPROM build (broken):** `update` shifted to 0x63d4 (total shift 0x3A0 =
+code growth 0x80 + EmulateFrame-section libgcc shift 0x320). BL now at
+~0x63d4 + 0x5B4 = 0x698**8**. Slot: 0x6988 mod 0x400 = **0x188**. Different
+bucket — hit a hot MinxCPU_Exec opcode in the BTB, constant mispredictions.
+
+**Fix:** engineer total shift = exactly **0x400** (one BTB period), restoring
+`update` to mod 0x400 = 0x034 → BL slot 0x1E8 (baseline). Do this by:
+
+1. Keep `*(.text.emulate_frame)` pinned with `. = ALIGN(0x400) + 0x20`
+   → EmulateFrame at set 1, libgcc shift = 0x320.
+2. Total code growth before `update` must = 0x400 − 0x320 = **0x0E0** = 224 bytes.
+   Currently 0x80 (start_emulation_with_rom). Gap = 0x60 = 96 bytes.
+3. Extract the `if (eeprom_load_pending)` block from `update()` into a
+   `__attribute__((noinline))` helper defined **before** `update()` in the
+   source file. This adds ~0x60 bytes of code before `update` in the binary
+   (via its own `.text.*` section), closing the gap, while keeping `update()`
+   nearly at baseline size.
+
+Result: total shift = 0x80 + 0x60 + 0x320 = 0x400. `update` at 0x6034 +
+0x400 = 0x6434, same BTB slot as baseline. EmulateFrame stays at set 1.
+
+### Why the sweep approach was necessary
+
+No analytical shortcut: the good BTB slot (0x1E8) was found by inspecting
+the baseline binary. The engineering approach above deliberately targets it,
+analogous to Codex's 0x40/0x80/0x140 offset sweep for MinxCPU_Exec. The
+forum confirms: identical code at a bad BTB slot can cost 20-50% throughput.
+
+### Remaining 2 fps gap (unresolved)
+
+Best achieved: **~26 fps** (vs 28 fps baseline). The residual comes from a
+12-byte shortfall: total code-growth-before-update = 0xD4, target = 0xE0.
+The gap cannot be closed by changing `link_map.ld` padding alone — the
+linker's 32-byte section alignment fills absorb small padding changes without
+propagating them to `update`'s address.
+
+Attempted adjustments (sweeping padding from +0x14 to +0x2C): none changed
+`update`'s address; EmulateFrame shifted sets but `update` stayed at 0x6428.
+
+The 12-byte shortfall also shifts the `blt.w` (loop condition for the
+EmulateFrame loop) from baseline slot 0x226 to 0x21A. This mismatch is the
+likely cause of the residual ~2 fps gap. It cannot be fixed without adding
+exactly 12 bytes of code to PokeMini_Playdate.c before `update`, which
+would require either a semantically meaningful 12-byte operation or a
+deliberate assembly NOP pad — both undesirable in production code.
+
+**Shipped state**: EmulateFrame at set 1 (0x4c20), `update` at 0x6428,
+BL-to-EmulateFrame at BTB slot 0x1E8 (exact baseline match). The `blt.w`
+is 12 bytes off baseline slot; the cost is ~2 fps average.
+
+### Memory layout invariant to maintain
+
+After any future code change to `PokeMini_Playdate.c`:
+- Recheck `update`'s start address in the map (`game.map`).
+- Target: **0x6034 + N×0x400** for some integer N (mod 0x400 = 0x034).
+- Also check `PokeMini_EmulateFrame` stays at I-cache **set 1** (bits[9:5]
+  of address = 1). If it drifts into set 8 or 19, fix the EmulateFrame
+  section padding in `link_map.ld`.
+- If `update` drifts, adjust by adding/removing code before `update` in
+  `PokeMini_Playdate.c` or by changing the EmulateFrame padding.
+
+## EEPROM save/load and I-cache aliasing (2026-05-14)
+
+Adding EEPROM helpers to `PokeMini_Playdate.c` caused a persistent ~6 fps
+regression (28 → 22 fps, smooth+3x) despite the helpers being startup-only
+(never called per-frame). Root cause: the 4× `pd->file->mkdir` calls in
+`ensure_eep_dir()` and the 8 KB EEPROM file read in `pd_load_eeprom()` were
+initially placed in `kEventInit` and `start_emulation_with_rom` respectively;
+those were fixed (deferred load, lazy dirs). But performance still did not
+recover.
+
+The compiled `update()` was byte-for-byte identical in both builds (confirmed
+via `arm-none-eabi-objdump` diff). The regression was entirely from linked
+binary layout:
+
+- Placing EEPROM helpers in `PokeMini_Playdate.c` (the first file in
+  `GAME_SOURCES`) grew the file by ~500 bytes, shifting all subsequent
+  `.text.*` sections by the same amount.
+- `PokeMini_EmulateFrame` (in `Hardware.c`) was pushed from **0x7c20**
+  (I-cache set 1, spans sets 1-8) to **0x7e40** (set 18, spans sets 18-25).
+- `MinxTimers_Sync` is permanently at **0x4670** (I-cache set 19).
+- At the shifted address, `PokeMini_EmulateFrame`'s second cache line
+  (0x7e60-0x7e7f) lands in **set 19** — the same set as `MinxTimers_Sync`.
+  Every `MinxTimers_Sync` call evicts EmulateFrame's set-19 line and vice
+  versa, creating a ping-pong cache conflict on every PM frame. This costs
+  ~6 fps steady-state.
+
+**Fix:** Move the EEPROM helper functions to a separate source file
+(`PokeMini_Playdate_EEPROM.c`) listed **after `Hardware.c`** in `GAME_SOURCES`.
+This places the helpers after `PokeMini_EmulateFrame` in the binary, so they
+do not shift it. `PokeMini_EmulateFrame` stays at 0x7c20 (sets 1-8), clear of
+`MinxTimers_Sync` (set 19).
+
+### Why PokeMini_EmulateFrame's address matters
+
+The Cortex-M7 has a 4 KB, 4-way set-associative I-cache with 32-byte lines
+→ 128 lines, 32 sets. Set index = bits[9:5] of the instruction address.
+
+`MinxTimers_Sync` is always at 0x4670 (set 19) because it is in `.text.hot`
+and the hot section is fixed by the custom `link_map.ld`. If any frequently-
+executed function occupies set 19 at the same time, they evict each other on
+every call.
+
+`PokeMini_EmulateFrame` (248 bytes = 8 cache lines) occupies sets S through
+S+7 from its start address. Safe positions:
+- Sets 1-8: baseline (start ≤ set 11). Set 19 not in range. ✓
+- Sets 18-25: the bad zone from the EEPROM build. Set 19 IS in range. ✗
+- Sets 20+: also safe (19 not in range). ✓
+
+### Also: PokeMini_LoadEEPROMFile was GC'd in the baseline
+
+The linker (`--gc-sections`) eliminated `PokeMini_LoadEEPROMFile` (in
+`source/PokeMini.c`) from the baseline build because nothing called it.
+Initially the EEPROM build pulled it in via `PokeMini_LoadEEPROMFile()`,
+adding ~0x7c bytes before `PokeMini_EmulateFrame`. Fixed by calling
+`pd_load_eeprom()` directly in the deferred block, keeping the function GC'd.
+
+### Deferred EEPROM load (kept out of kEventInit / start_emulation_with_rom)
+
+All flash I/O is deferred to the first `update()` call after ROM selection:
+1. `start_emulation_with_rom` sets `eeprom_load_pending = 1`.
+2. First `update()` in emulator mode: keepalive `getElapsedTime` calls fire
+   first, then EEPROM is loaded and clock is synced, then emulation begins.
+This pattern avoids file I/O during the Playdate firmware's startup window
+(which would suppress the keepalive's +3 fps effect) without losing game data.
+
 ## Build commands
 
 ### Canonical device performance build
@@ -229,6 +373,13 @@ early-return is safe and worth keeping for performance.
   (a) clean `Source/pdex.elf` and `build-device/` together before each
   device build, or (b) check `Source/pdex.elf`'s mtime against
   `PokeMini_Playdate.c`'s before sideloading.
+- **EEPROM load order matters.** Upstream `PokeMini_LoadROM()` formats and
+  loads EEPROM before `PokeMini_Reset(0)`, then reset applies CPU/BIOS/RTC
+  setup. The Playdate custom ROM loader should keep that order. Loading EEPROM
+  after reset can subtly change startup state and makes save-enabled testing
+  incomparable with the old no-EEPROM path. Also don't mark EEPROM dirty just
+  because host RTC was injected; upstream `PokeMini_SyncHostTime()` writes the
+  timestamp directly without forcing an EEPROM save.
 - **Soft reset vs hard reset**: `PokeMini_Reset(0)` does a soft reset.
   This does NOT clear PM_RAM (only `PokeMini_Create` and hard reset do).
   After `PokeMini_Create`, RAM is `0xFF` everywhere. The freebios `sreset`

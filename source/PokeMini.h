@@ -36,11 +36,16 @@
 //
 // On non-Playdate builds these expand to nothing.
 #ifdef TARGET_PLAYDATE
-#define POKEMINI_HOT       __attribute__((section(".text.hot")))
-#define POKEMINI_HOT_EXEC  __attribute__((section(".text.hot.exec")))
+#define POKEMINI_HOT           __attribute__((section(".text.hot")))
+#define POKEMINI_HOT_EXEC      __attribute__((section(".text.hot.exec")))
+// PokeMini_EmulateFrame gets its own section so link_map.ld can pin it to
+// a good I-cache position independent of PokeMini_Playdate.c code size.
+// See NOTES.md "EEPROM save/load and I-cache aliasing".
+#define POKEMINI_EMULATE_FRAME __attribute__((section(".text.emulate_frame")))
 #else
 #define POKEMINI_HOT
 #define POKEMINI_HOT_EXEC
+#define POKEMINI_EMULATE_FRAME
 #endif
 
 // Common functions

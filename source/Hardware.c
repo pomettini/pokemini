@@ -85,7 +85,7 @@ int PokeMini_EmulateCycles(int lcylc)
 
 // Emulate 1 frame, return cycles ran
 static int PokeMini_EmulateFrameRun;
-int PokeMini_EmulateFrame(void)
+POKEMINI_EMULATE_FRAME int PokeMini_EmulateFrame(void)
 {
 	int lcylc = 0;
 	int synccylc = CommandLine.synccycles;

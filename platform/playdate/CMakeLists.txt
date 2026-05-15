@@ -45,6 +45,7 @@ set(GAME_SOURCES
     ${POKEMINI_ROOT}/source/PokeMini.c
     ${POKEMINI_ROOT}/source/Multicart.c
     ${POKEMINI_ROOT}/source/Hardware.c
+    PokeMini_Playdate_EEPROM.c
     ${POKEMINI_ROOT}/source/Video.c
     ${POKEMINI_ROOT}/source/Video_x1.c
     ${POKEMINI_ROOT}/source/CommandLine.c

@@ -36,6 +36,21 @@ SECTIONS
 		*(.text.hot*)
 		. = ALIGN(32);
 
+		/* Pin PokeMini_EmulateFrame (tagged POKEMINI_EMULATE_FRAME) to I-cache
+		 * set 1, and keep the BL-to-EmulateFrame in update() at the same
+		 * branch-predictor slot (mod 0x400) as the baseline build.
+		 *
+		 * Hot section ends at ~0x4a00. ALIGN(0x400) → 0x4c00. +0x20 → 0x4c20
+		 * (set 1). libgcc shift = 0x4c20 + EmulateFrame(~0x100) − 0x4a00 = 0x320.
+		 *
+		 * Total shift = code_growth_before_update + libgcc_shift must be a
+		 * multiple of 0x400 so update lands at the same BTB slot as baseline
+		 * (mod 0x400 = 0x034). Target: 0x0E0 + 0x320 = 0x400. See NOTES.md
+		 * "Branch predictor slot engineering" for the full derivation. */
+		. = ALIGN(0x400) + 0x20;
+		*(.text.emulate_frame)
+		. = ALIGN(32);
+
 		*(.text)
 		*(.text.*)
 
