@@ -187,15 +187,13 @@ static volatile AppMode app_mode = MODE_PICKER;
 // thread checks this to silence output during the system menu. volatile for
 // the same reason as app_mode — written on the main thread, read on audio.
 static volatile int emu_paused = 0;
-// Set when a ROM loads; cleared in update() after EEPROM is read.
-// Keeps all flash I/O out of kEventInit and start_emulation_with_rom so
-// the perf-keepalive is not disrupted during the firmware's startup window.
-static volatile int eeprom_load_pending = 0;
 
 // Audio source handle
 static SoundSource *audio_source = NULL;
 
 static int audio_callback(void *context, int16_t *left, int16_t *right, int len);
+static int update(void *userdata);
+static int update_first_after_rom(void *userdata);
 
 static void stop_audio_source(void)
 {
@@ -832,11 +830,14 @@ static void start_emulation_with_rom(const char *path)
 	// a real PM EEPROM chip.
 	MinxIO_FormatEEPROM();
 
-	// Schedule EEPROM load for the first update() frame after this ROM starts.
-	// Loading here (inside the update callback's call stack) would block long
-	// enough to disrupt the perf-keepalive; deferring keeps all flash I/O out
-	// of start_emulation_with_rom so the keepalive window is never missed.
-	eeprom_load_pending = StringIsSet(CommandLine.eeprom_file);
+	// Swap the update callback so the first frame after this ROM load does the
+	// EEPROM read + clock sync (via update_first_after_rom), and every frame
+	// after that runs the clean steady-state update(). Keeping the check OUT
+	// of update() leaves its hot-loop branches in the same BTB slots as the
+	// no-EEPROM baseline build. See NOTES.md "EEPROM via callback swap".
+	pd->system->setUpdateCallback(
+		StringIsSet(CommandLine.eeprom_file) ? update_first_after_rom : update,
+		pd);
 
 	// Match upstream PokeMini_LoadROM ordering: EEPROM is ready before the
 	// soft reset, then the reset performs BIOS/CPU setup and applies host RTC.
@@ -938,24 +939,14 @@ static void picker_update(void)
 	render_picker();
 }
 
-// Out-of-line helper for the deferred EEPROM load and clock sync that fires
-// once on the first emulator-mode update() after a ROM switch.
-//
-// MUST be defined before update() and MUST NOT be inlined. Its presence here
-// (as its own .text.* section) adds ~0x60 bytes of code immediately before
-// update() in the binary. Combined with the EmulateFrame section padding in
-// link_map.ld (ALIGN(0x400)+0x20 → libgcc shift 0x320) and the 0x80-byte
-// start_emulation_with_rom growth, total shift = 0x60 + 0x80 + 0x320 = 0x400
-// — exactly one BTB period — which keeps update()'s BL to PokeMini_EmulateFrame
-// in the same branch-predictor slot as the baseline build. See NOTES.md
-// "Branch predictor slot engineering".
-__attribute__((noinline))
+// Reads the .eep save file off flash and writes the PM RTC fields with the
+// Playdate's wall-clock time. Called once per ROM switch from the one-shot
+// update_first_after_rom() callback (see below) — never from update()'s hot
+// path. The wall-clock sync follows the file read so the timestamp bytes
+// land on top of the restored save data rather than getting overwritten.
 static void eeprom_deferred_load_and_sync(void)
 {
 	pd_load_eeprom(CommandLine.eeprom_file);
-	// Sync PM hardware clock from Playdate system time (libc time() = 0 on device).
-	// Done AFTER pd_load_eeprom so the time fields in EEPROM[0x1FF6..0x1FFF]
-	// are written on top of the restored save data, not lost under it.
 	struct PDDateTime dt;
 	pd->system->convertEpochToDateTime(
 	    pd->system->getSecondsSinceEpoch(NULL), &dt);
@@ -966,11 +957,6 @@ static void eeprom_deferred_load_and_sync(void)
 	    (uint8_t)dt.hour,
 	    (uint8_t)dt.minute,
 	    (uint8_t)dt.second);
-	// PMR_SEC_CTRL / SecTimerCnt already set by PokeMini_SyncHostTime()
-	// inside PokeMini_Reset(0). Omitted here to keep function size ~0x60
-	// bytes: eeprom_deferred_load_and_sync() + start_emulation_with_rom
-	// growth sums to 0x0E0, giving total binary shift 0x400 so update()'s
-	// BL to PokeMini_EmulateFrame lands in baseline BTB slot 0x1E8.
 }
 
 // Update callback: called by the Playdate runtime at 30 fps (target).
@@ -1038,13 +1024,6 @@ static int update(void *userdata)
 		}
 	}
 
-	// Deferred EEPROM load + clock sync (see eeprom_deferred_load_and_sync
-	// above for the full logic and the BTB-engineering comment).
-	if (eeprom_load_pending) {
-		eeprom_load_pending = 0;
-		eeprom_deferred_load_and_sync();
-	}
-
 #ifdef PD_PERF_DIAG
 	unsigned int t0 = PDPerf_NowUs();
 #endif
@@ -1075,6 +1054,20 @@ static int update(void *userdata)
 	}
 #endif
 
+	return 1;
+}
+
+// One-shot update callback installed by start_emulation_with_rom() when a ROM
+// has an associated .eep file. Performs the deferred flash I/O and clock sync,
+// then swaps the runtime callback back to update() so the steady-state hot
+// path is byte-for-byte equivalent to the no-EEPROM baseline (no per-frame
+// `if (pending)` check, no BTB slot drift). See NOTES.md "EEPROM via callback
+// swap".
+static int update_first_after_rom(void *userdata)
+{
+	(void)userdata;
+	eeprom_deferred_load_and_sync();
+	pd->system->setUpdateCallback(update, pd);
 	return 1;
 }
 
@@ -1190,9 +1183,8 @@ int eventHandler(PlaydateAPI *playdate, PDSystemEvent event, uint32_t arg)
 			start_emulation_with_rom(path);
 		} else {
 			app_mode = MODE_PICKER;
+			pd->system->setUpdateCallback(update, pd);
 		}
-
-		pd->system->setUpdateCallback(update, pd);
 
 	} else if (event == kEventPause) {
 		emu_paused = 1;

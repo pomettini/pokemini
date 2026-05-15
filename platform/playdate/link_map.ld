@@ -37,21 +37,30 @@ SECTIONS
 		. = ALIGN(32);
 
 		/* Pin PokeMini_EmulateFrame (tagged POKEMINI_EMULATE_FRAME) to I-cache
-		 * set 1, and keep the BL-to-EmulateFrame in update() at the same
-		 * branch-predictor slot (mod 0x400) as the baseline build.
-		 *
-		 * Hot section ends at ~0x4a00. ALIGN(0x400) → 0x4c00. +0x20 → 0x4c20
-		 * (set 1). libgcc shift = 0x4c20 + EmulateFrame(~0x100) − 0x4a00 = 0x320.
-		 *
-		 * Total shift = code_growth_before_update + libgcc_shift must be a
-		 * multiple of 0x400 so update lands at the same BTB slot as baseline
-		 * (mod 0x400 = 0x034). Target: 0x0E0 + 0x320 = 0x400. See NOTES.md
-		 * "Branch predictor slot engineering" for the full derivation. */
+		 * set 1. The set index is bits[9:5] of the address, so +0x20 from a
+		 * 0x400-aligned boundary lands the function start in set 1, clear of
+		 * MinxTimers_Sync at set 19. Confirmed by 2026-05-15 diagnostic: without
+		 * this pinning, EmulateFrame ends up at set 16 and average fps drops
+		 * ~2-3 fps. See NOTES.md "EEPROM save/load and I-cache aliasing". */
 		. = ALIGN(0x400) + 0x20;
 		*(.text.emulate_frame)
 		. = ALIGN(32);
 
+		/* Drop in non-Playdate-port code first so its size shrinks the padding
+		 * we need before update(). */
 		*(.text)
+		*(EXCLUDE_FILE(*PokeMini_Playdate.c.obj) .text.*)
+
+		/* Pin .text.update at mod 0x400 = 0x034 so the per-frame loop's blt.w
+		 * and BL-to-EmulateFrame land in the same branch-predictor slots as
+		 * the no-EEPROM baseline build. Measured 2026-05-15: this pin saves
+		 * ~1 fps at title screen (1146ms → 1093ms). See NOTES.md "EEPROM via
+		 * callback swap". */
+		. = ALIGN(0x400) + 0x34;
+		*(.text.update)
+		. = ALIGN(32);
+
+		/* Remaining PokeMini_Playdate.c sections (cold paths). */
 		*(.text.*)
 
 		KEEP(*(.init))

@@ -4,7 +4,132 @@ Living document of bugs found, fixes applied, and gotchas learned while porting
 the PokeMini emulator to the Playdate. Update this whenever something
 non-obvious is discovered. Newest entries on top.
 
-## Branch predictor slot engineering for EEPROM build (2026-05-15)
+## EEPROM via callback swap + linker-pinned update (2026-05-15)
+
+Architectural cleanup of the EEPROM commit. The previous "Branch predictor
+slot engineering" attempt (below) kept the `if (eeprom_load_pending)` check
+inside `update()`, which baked 14 bytes of new code into the per-frame hot
+path and made `update()`'s shape differ from the no-EEPROM baseline. This
+section is the cleanup; the 2 fps gap discussion follows.
+
+The new design:
+
+1. **No per-frame check inside `update()`.** `update()` is now byte-for-byte
+   identical to the no-EEPROM baseline. The flag (`eeprom_load_pending`) is
+   gone; so is the `if/cbz/bl` block at the top of the EmulateFrame loop.
+2. **One-shot callback swap.** `start_emulation_with_rom` calls
+   `pd->system->setUpdateCallback(update_first_after_rom, pd)` when the
+   loaded ROM has an `.eep` file. `update_first_after_rom` does the file
+   read + clock sync, then `setUpdateCallback(update, pd)` swaps the runtime
+   back to the steady-state `update()` for every subsequent frame. The
+   callback swap costs zero per-frame overhead — the Playdate runtime stores
+   one function pointer and calls it.
+3. **Linker pins `update` at mod 0x400 = 0x034.** Even with `update()` at
+   baseline byte-shape, its absolute address depends on everything before it
+   in the binary. The linker script in `link_map.ld` now uses
+   `EXCLUDE_FILE(*PokeMini_Playdate.c.obj) .text.*` to land all
+   non-Playdate-port code first, then `. = ALIGN(0x400) + 0x34;` pins
+   `*(.text.update)`, then the remaining PokeMini_Playdate.c sections
+   (cold paths) fill in afterward. Result: `update` lands at `0x17434`
+   (mod 0x400 = 0x034), the `blt.w` loop entry at slot **0x226** (baseline
+   match), and the `BL PokeMini_EmulateFrame` at slot **0x1EA** (baseline
+   match). Padding cost: ~688 bytes (`*fill*` at 0x17184).
+
+This eliminates the BTB-aliasing gamble entirely and keeps the EmulateFrame
+loop in the same predictor slots as the keeper baseline.
+
+### What about `PokeMini_EmulateFrame`?
+
+Still pinned at `0x4c20` (I-cache set 1) via the existing
+`.text.emulate_frame` section + `ALIGN(0x400) + 0x20` placement. That fix
+(NOTES "EEPROM save/load and I-cache aliasing" below) is independent — it
+addresses cache-set collision with `MinxTimers_Sync` at set 19, not BTB.
+
+### Memory layout invariants
+
+After any future code change to `PokeMini_Playdate.c`:
+- Verify `update`'s start address still lands at mod 0x400 = 0x034 in
+  `game.map`. If the EXCLUDE_FILE list grows, padding may need adjustment.
+- Verify `PokeMini_EmulateFrame` is still at `0x4c20` (or any address with
+  bits[9:5] = 1, i.e., set 1).
+
+### Baseline vs EEPROM build measurements (2026-05-15)
+
+Controlled on-device comparison, Togepi no Daibouken (Japan), smooth+3x.
+
+**Baseline (HEAD~1, pre-EEPROM commit), early game (no save):**
+- Steady-state windows: clusters at 28.5 fps (six consecutive: 28.5/28.5/28.5/28.5/28.5/28.5), 28.2 fps (six consecutive)
+- Peak window: 29.6 fps
+- Dips: 14.6 (intro), 19.8, 22.4, 23.8-24.0 fps — content-driven
+- **Eyeballed steady median: ~28.3 fps**
+
+**Baseline (HEAD~1), title screen:**
+- **Rock-solid 28.8 fps constant** (1040-1042ms windows, zero variance)
+
+**Path 1 build (current, with EEPROM machinery, .eep loaded), early game:**
+- Steady-state windows: 25-27 fps clusters (1110-1140 ms windows)
+- Peak window: 29.6 fps
+- Dips: 13-22 fps with similar frequency
+- **Eyeballed steady median: ~26 fps**
+
+**Path 1 build, title screen:**
+- **27.4 fps constant** (1093-1096 ms windows, zero variance)
+
+Conclusion: the gap is **real** and shows up even on the title screen,
+where content is identical between baseline and Path 1. The per-frame
+delta is `1093 - 1042 = 51 ms per 30 frames = 1.7 ms per frame` of
+pure code overhead. This eliminates "game state matters" — the cost is
+introduced by linking the EEPROM machinery itself, not by Togepi reading
+saved data differently.
+
+The cost cannot be from `update()` directly (byte-identical to baseline)
+or from `PokeMini_EmulateFrame` (same code, same I-cache set, only its
+absolute address moved). It must be from something pulled in by the
+EEPROM commit that shifts cache behavior on the hot path.
+
+### The 2 fps gap is real but architecture-independent (2026-05-15)
+
+After the callback swap + linker pin landed, on-device testing (Togepi JP,
+smooth+3x, with .eep loaded) still averaged ~25-26 fps vs the no-EEPROM
+baseline's reported 28 fps. Several experiments ruled out architectural
+causes:
+
+| Hypothesis | Test | Result |
+|---|---|---|
+| `if (eeprom_load_pending)` cost | Path 1: removed via callback swap | No change |
+| BTB slot mismatch (NOTES theory below) | Linker pin: slots now match baseline exactly | No change |
+| `.text.emulate_frame` set-1 pinning | Removed: EmulateFrame at set 16 (natural) | Lost ~2 fps |
+| `pd` non-static vs static codegen | Reverted to static via get_pd() shim | Identical `update()` codegen, no fps change |
+
+The set-1 pinning IS load-bearing (lose it → lose 2 fps); everything else
+is a wash. Sample windows hit **28.5, 29.6, 28.1 fps** consistently, so the
+peak performance is at baseline. The average is dragged down by dips that
+appear at regular intervals (1.5-2.5 second windows of 14-22 fps) regardless
+of build configuration.
+
+Working hypothesis for the residual gap:
+- **Game state matters.** With an .eep file loaded, the player is mid-game
+  with more entities, sound events, and active state. The baseline 28 fps
+  number was likely measured with a fresh ROM (no save) on early game.
+  Apples-to-apples comparison requires running baseline (HEAD~1) on the
+  same save file in the same scene.
+- The dips are content-driven (sprite-heavy scenes, sound interrupts), not
+  code-driven.
+
+### Conclusion
+
+Path 1 (callback swap + linker pin) is the cleanest the architecture can be:
+no per-frame check, `update()` byte-equivalent to baseline, BTB slots match
+baseline, EmulateFrame at I-cache set 1. If further fps recovery is needed,
+the next place to look is content-driven cost (audio thread, sprite render,
+specific PM opcodes), not code layout.
+
+## Branch predictor slot engineering for EEPROM build (2026-05-15, superseded)
+
+Earlier attempt at the EEPROM 2-fps gap. Superseded by "EEPROM via callback
+swap + linker-pinned update" above — kept here for the analytical context
+on BTB aliasing on Cortex-M7 Rev A, which is still relevant for any future
+hot-path code that intersects update()'s alignment.
 
 The I-cache set fix (pinning `PokeMini_EmulateFrame` at set 1 via
 `.text.emulate_frame`) recovered 3 fps (22→25) but left a persistent 2-3 fps
