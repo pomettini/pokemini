@@ -23,9 +23,11 @@ If `/Shared/Emulation/pm/games/` is empty, the emulator boots with
 FreeBIOS only; FreeBIOS already shows a "no ROM" splash, which is a
 better default than a custom homebrew demo.
 
-EEPROM saves and save states stay in the app's own
-`/Data/com.pomettini.pokemini/` — those are emulator-private and should
-not be shared.
+EEPROM saves live alongside the games at
+`/Shared/Emulation/pm/saves/<rom_basename>.eep`. Putting them in `/Shared/`
+(rather than the app-private `/Data/`) lets the player back them up, move
+them between devices, or hand them off to another PM emulator that follows
+the same convention.
 
 ## 1. Ship blockers (cannot release without)
 
@@ -40,15 +42,20 @@ or be deleted entirely; the C code no longer references it.
 Remaining sub-task: add `Source/*.min` to `.gitignore` so casual local
 ROM copies don't get committed.
 
-### 1b. EEPROM save/load on device
-`PokeMini_Playdate.c:390` notes that EEPROM save uses `fopen` (works on
-simulator, silent fail on device). `load_rom` already uses `pd->file->*`
-APIs correctly — the same pattern needs to wire into PokeMini's
-`PokeMini_CustomSaveEEPROM` / `PokeMini_CustomLoadEEPROM` callback hooks.
-Path scheme: `/Data/com.pomettini.pokemini/eeprom/<rom_basename>.eep`.
+### 1b. EEPROM save/load on device — done
+`PokeMini_CustomSaveEEPROM` and `PokeMini_CustomLoadEEPROM` are wired to
+`pd_save_eeprom` / `pd_load_eeprom` (in `PokeMini_Playdate_EEPROM.c`),
+which use `pd->file->*` instead of `fopen`. Save path:
+`/Shared/Emulation/pm/saves/<rom_basename>.eep`. Loaded on first frame
+after ROM start (via a one-shot update callback), written on ROM switch
+and `kEventTerminate`. Wall-clock time is synced from
+`pd->system->getSecondsSinceEpoch()` so PM games with a real-time
+mechanic see the correct date/time (libc `time()` returns 0 on device).
 
-Without this, players lose all in-game progress whenever the app exits
-— ship-blocker for any RPG-style game.
+See `NOTES.md` → "EEPROM via callback swap + linker-pinned update" for
+the per-frame architecture (the callback swap avoids a per-frame
+`if (pending)` check inside `update()`, keeping the hot path's branch
+predictor slots aligned with the no-EEPROM baseline).
 
 ### 1c. ROM picker — done (rough)
 Implemented in `PokeMini_Playdate.c`:
@@ -150,25 +157,16 @@ Use Playdate's system menu API (`pd->system->addMenuItem`,
   `LCDMODE_2SHADES` for performance testing. The short label is intentional:
   Playdate option labels clip after roughly five characters.
 - **C button**: which input does C map to (see 2a)
-- **Save state** / **Load state** slots (see 2e)
 - ~~**Quit to ROM picker**~~ — wired up (see 1c).
-
-### 2e. Save states (in addition to EEPROM)
-PokéMini already has full save/load state code (`POKELOADSS_*` /
-`POKESAVESS_*` in every component). Wire it up:
-- Bind to system menu items: "Save state slot 1/2/3", "Load state slot
-  1/2/3".
-- Path: `/Data/com.pomettini.pokemini/states/<rom_basename>.s1` etc.
-  (emulator-private — not in `/Shared/`).
-- Include a thumbnail in each save (optional; can just be a screenshot).
 
 ## 3. Quality polish (release-grade feel)
 
-### 3a. Per-ROM data isolation
-Currently EEPROM and save states (when added) live in flat directories.
-Better: `/Data/com.pomettini.pokemini/<rom_basename>/eeprom.eep`,
-`.../states/`, etc. Multiple ROMs with the same internal name don't
-clobber each other.
+### 3a. Per-ROM save isolation
+Saves are flat in `/Shared/Emulation/pm/saves/<rom_basename>.eep`. If two
+ROM files share the same base filename they would clobber each other's
+EEPROM. Collisions are unlikely in practice (PM library is small) so this
+is low priority — a nested `/Shared/Emulation/pm/saves/<rom_basename>/eeprom.eep`
+layout would solve it cleanly if it ever comes up.
 
 ### 3b. Empty-state UI
 With the `boot.min` fallback in place, the app no longer black-screens
@@ -187,7 +185,7 @@ be told *why* they're seeing the demo ROM and how to load real games:
 ### 3d. Error recovery
 - Corrupt ROM (size 0, bad magic): show error, return to picker.
 - Failed `malloc` for ROM buffer: same.
-- Failed save state write: show error, don't claim success.
+- Failed EEPROM save write: show error, don't claim success.
 
 ### 3e. Battery / contrast pass-through
 PM has a low-battery indicator and contrast control. Could:
@@ -248,6 +246,12 @@ pointer. Could remove the SetVideo call entirely and shave a few KB.
 
 ## 5. Out of scope (deliberately not doing)
 
+- **Save states** — PokeMini's `POKELOADSS_*` / `POKESAVESS_*` machinery
+  could be wired to system-menu slots, but the PM library is mostly
+  short-session arcade games where retrying from scratch is the point;
+  RPG-style games (Togepi, Pokemon Party Mini's RPG modes) write their
+  own EEPROM saves, which 1b already handles. Save states would be a
+  feature without a clear audience.
 - **Multi-cart support** — PM had multi-game cartridges; the upstream
   emulator supports them via `-multicart`. Niche, not worth the UI cost.
 - **Network/IR communication** — PM had IR for trades. Playdate has no
@@ -269,15 +273,15 @@ A reasonable shipping path:
 2. ~~**1c**~~ — ROM picker scanning `/Shared/Emulation/pm/games/`. ✅
 3. ~~**1d (LICENSE), 4b**~~ — LICENSE bundled, README done. ✅
 4. ~~**2c**~~ — accelerometer-based shake (crank now free). ✅
-5. **1b** — EEPROM persistence (a few hours, biggest player-facing win)
+5. ~~**1b**~~ — EEPROM persistence via `pd->file->*` + wall-clock sync. ✅
 6. ~~**2b, 3c**~~ — pause/resume handling. ✅
-7. **3a, 3b** — per-ROM data isolation + empty-state hint (half day)
-8. **2d** — remaining settings menu wiring (audio/reset/save-state items;
-   LCD mode and ROM picker are already wired; C has a crank first pass)
-9. **2e, 1e** — save states UI + card art when graphics are ready
+7. **3b** — empty-state hint when `/Shared/Emulation/pm/games/` is empty
    (half day)
-10. **1d (Credits)**, **3d, 3e, 3f** — in-app credits + polish pass
-    (as time allows)
+8. **2d** — remaining settings menu wiring (audio/reset items; LCD mode
+   and ROM picker are already wired; C has a crank first pass)
+9. **1e** — card art when graphics are ready
+10. **1d (Credits)**, **3a**, **3d, 3e, 3f** — in-app credits + per-ROM
+    save isolation + polish pass (as time allows)
 11. **3g** — review 3.5x scale readability/performance (very low priority)
 
 That's roughly 1-2 days of focused work to a v1.0 release from here.

@@ -3,8 +3,8 @@
 A port of JustBurn's [PokéMini emulator](https://sourceforge.net/projects/pokemini/)
 to the Panic® [Playdate®](https://play.date/). Plays
 [Pokémon® Mini](https://en.wikipedia.org/wiki/Pok%C3%A9mon_Mini)
-cartridges (and homebrew). Most games run at full speed, a few
-graphics-heavy titles run slightly under native speed.
+cartridges (and homebrew). Most titles are very playable, fast-paced
+action games can run a few fps below native speed.
 
 **ROMs are not included.** The bundle ships with FreeBIOS only.
 
@@ -19,6 +19,10 @@ Drop `.min` files into `/Shared/Emulation/pm/games/` on your Playdate. The folde
 
 Return to the picker mid-game from Playdate's system menu.
 
+## Saves
+
+In-game saves (the cartridge's EEPROM) are written to `/Shared/Emulation/pm/saves/<rom_name>.eep` when you switch ROMs or quit the app. Saves persist across restarts and survive sideloading a new build.
+
 ## Controls
 
 | Playdate              | Pokémon Mini |
@@ -31,13 +35,10 @@ Return to the picker mid-game from Playdate's system menu.
 
 ## Options (found in Playdate system menu)
 
-- **LCD Mode**: `Soft` (default, smoothed) or `Fast` (raw 2-shade).
-- **Scale**: `3x` (default) or `3.5x`.
-
-## Known limitations
-
-- No EEPROM save on device.
-- No save-state UI yet.
+- **LCD Mode**: `Soft` (default) smooths the greys, to mimic the
+  original screen. `Fast` is slightly faster (duh!) but greys will flicker.
+- **Scale**: `3x` (default) is pixel-perfect with a black border. `3.5x`
+  fills the whole screen but stretches.
 
 ## Credits
 
