@@ -985,25 +985,28 @@ static int update(void *userdata)
 	int pm_frames = frame_accum / 5;
 	frame_accum -= pm_frames * 5;
 
-	// PERF KEEPALIVE (do NOT strip — see NOTES.md "Perf-keepalive
-	// minimal recipe" entry). Empirically required to keep on-device
-	// throughput at ~25 fps; without it, perf drops to ~12 fps on heavy
-	// ROMs even though the elf is byte-identical in the hot path.
+	// PERF KEEPALIVE (do NOT strip). Two pieces, each load-bearing for a
+	// different firmware mechanism:
 	//
-	// Minimum recipe found by bisection:
-	//   - 4× pd->system->getElapsedTime() per update (returns are
-	//     discarded; the calls themselves are what matters)
-	//   - one format-rich pd->system->logToConsole() per second, with
-	//     %f-style float arg(s) so the firmware does FP format work
+	// 1. The per-update busy-loop keeps the M7 from idle-downclocking. The
+	//    Playdate firmware appears to ramp the core clock down when an app
+	//    looks idle to it; any sustained per-update work prevents that.
+	//    Confirmed 2026-05-31 by A/B test: replacing 4× getElapsedTime()
+	//    syscalls with a tight volatile NOP loop gave identical on-device
+	//    throughput. Either pattern works — the busy-loop is just cleaner
+	//    and avoids the syscall ritual. 2000 iterations ≈ a few microseconds.
+	//    `volatile` on the counter is required so -Os doesn't elide it.
 	//
-	// Smaller variants (no syscalls / 1× syscall / log alone) cap at
-	// ~22 fps. Adding per-update FP math is negative (-2 fps overhead).
-	// We don't fully understand the firmware-side mechanism — see NOTES.
+	// 2. The once-per-second format-rich logToConsole below keeps something
+	//    else warm (likely a USB serial / scheduler tick). Without it,
+	//    fps caps around 12-14 even with the busy-loop running. Constant-
+	//    string logs don't help; only format-rich (%f / %.1f / etc.) does.
+	//
+	// See NOTES.md "Perf-keepalive minimal recipe" and "Keepalive mechanism
+	// confirmed (2026-05-31)" for the full bisection history.
 	{
-		(void)pd->system->getElapsedTime();
-		(void)pd->system->getElapsedTime();
-		(void)pd->system->getElapsedTime();
-		(void)pd->system->getElapsedTime();
+		volatile unsigned int spin = 2000;
+		while (spin--) { __asm__ volatile("nop"); }
 
 		static int   keepalive_count = 0;
 		static int   keepalive_total = 0;
@@ -1027,7 +1030,33 @@ static int update(void *userdata)
 #ifdef PD_PERF_DIAG
 	unsigned int t0 = PDPerf_NowUs();
 #endif
-	for (int i = 0; i < pm_frames; i++) PokeMini_EmulateFrame();
+	{
+		// PM_RAM-in-DTCM experiment: relocate the active PM_RAM range onto
+		// the stack (which lives in zero-wait-state DTCM on the Playdate's
+		// Cortex-M7) for the duration of this update's PM emulation, then
+		// copy back. Only the active region 0x1000-0x20FF (= 0x1100 = 4352
+		// bytes) is mapped to PM hardware addresses — the upper half of the
+		// PM_RAM[8192] allocation is overprovisioning. Copying just the
+		// active range keeps stack usage well under the Playdate's budget
+		// (Beetle VB measured ~7.7 KB free; we want margin for the
+		// EmulateFrame call chain on top). See NOTES.md "PM_RAM in DTCM".
+		// Enable with -DPOKEMINI_PM_RAM_DTCM=1 at build time.
+#if POKEMINI_PM_RAM_DTCM
+		#define PM_RAM_ACTIVE_BYTES 0x1100  /* 4352, the in-use range */
+		uint8_t pm_ram_dtcm[PM_RAM_ACTIVE_BYTES] __attribute__((aligned(32)));
+		__builtin_memcpy(pm_ram_dtcm, PM_RAM_storage, PM_RAM_ACTIVE_BYTES);
+		uint8_t *pm_ram_save = PM_RAM;
+		PM_RAM = pm_ram_dtcm;
+#endif
+
+		for (int i = 0; i < pm_frames; i++) PokeMini_EmulateFrame();
+
+#if POKEMINI_PM_RAM_DTCM
+		__builtin_memcpy(PM_RAM_storage, pm_ram_dtcm, PM_RAM_ACTIVE_BYTES);
+		PM_RAM = pm_ram_save;
+		#undef PM_RAM_ACTIVE_BYTES
+#endif
+	}
 #ifdef PD_PERF_DIAG
 	pdperf_emu_us += PDPerf_NowUs() - t0;
 	pdperf_pm_frames += (unsigned int)pm_frames;
@@ -1100,11 +1129,17 @@ int eventHandler(PlaydateAPI *playdate, PDSystemEvent event, uint32_t arg)
 		// that to suppress flicker and give moving "gray" sprites a soft fade
 		// instead of dither smear. See render_screen for the threshold logic.
 		CommandLine.lcdmode    = LCDMODE_ANALOG;
-		// 512 is the empirical ceiling on this hardware. Tried 1024 and 2048;
-		// both break PRC frame-render timing (LCDPixelsA never populates →
-		// white PM screen, audio plays normally because it runs on a
-		// separate thread). Don't push this past 512. See NOTES.md.
-		CommandLine.synccycles = 512;
+		// MinxPRC_Sync increments PRCCnt by MINX_PRCTIMERINC (= 19622) cycles
+		// per call. Its state machine triggers BG&SPR-render and Copy-to-LCD
+		// on 0x01000000-wide PRCCnt windows. To never skip a window in a
+		// single MinxPRC_Sync call:
+		//   synccycles * 19622  <  0x01000000 (= 16,777,216)
+		//   synccycles          <  854
+		// 800 leaves margin for the while-loop overshoot. Past ~854 the PRC
+		// frame triggers can be skipped (LCDPixelsA stays blank → white screen),
+		// which is why 1024/2048 previously broke. See NOTES.md "synccycles
+		// ceiling: PRCCnt window skipping".
+		CommandLine.synccycles = 800;
 
 		JoystickSetup("Playdate", 0, 30000, PD_KeysNames, 7, PD_KeysMapping);
 

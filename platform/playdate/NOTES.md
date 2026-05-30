@@ -4,6 +4,108 @@ Living document of bugs found, fixes applied, and gotchas learned while porting
 the PokeMini emulator to the Playdate. Update this whenever something
 non-obvious is discovered. Newest entries on top.
 
+## synccycles ceiling: PRCCnt window skipping (2026-05-15)
+
+Older notes treat `synccycles = 512` as an empirical hardware ceiling
+("Don't push this past 512"). That framing is wrong — it's a fixable
+**software bug** in `MinxPRC_Sync`'s state machine, with a mathematically
+derivable safe upper bound around 854.
+
+### Mechanism
+
+`MinxPRC_Sync` in `source/MinxPRC.c:121`:
+
+```c
+MinxPRC.PRCCnt += MINX_PRCTIMERINC * PokeHWCycles;
+```
+
+Disassembly of `MinxPRC_Sync` in a release build (`objdump`,
+`0x490a: movw r0, #19622`) confirms `MINX_PRCTIMERINC = 0x4CA6 = 19622`.
+
+The state machine downstream of that increment fires triggers on
+discrete `PRCCnt & 0xFF000000` windows:
+
+- BG&SPR render trigger: `PRCCnt & 0xFF000000 == 0x18000000` (16M wide)
+- Copy-to-LCD trigger:   `PRCCnt & 0xFF000000 == 0x39000000` (16M wide)
+- End-of-frame reset:    `PRCCnt >= 0x42000000`
+
+Each "window" is `0x01000000 = 16,777,216` PRCCnt units = `16777216 / 19622
+≈ 854 CPU cycles`. If a single `MinxPRC_Sync` call advances PRCCnt by more
+than 854 cycles' worth, PRCCnt can jump entirely past a window and the
+matching `else if` branch never fires that frame. `MinxPRC_Render` /
+`MinxPRC_CopyToLCD` is silently skipped. `LCDPixelsA` stays blank → white
+PM screen. CPU and audio threads keep running because they aren't
+gated on the PRC state. Exactly the documented symptom.
+
+### Fix
+
+`CommandLine.synccycles` was 512; now **800** (in `kEventInit`). 800
+leaves margin for the `while (PokeHWCycles < synccylc)` overshoot — the
+loop exits when PokeHWCycles first exceeds synccylc, so the actual count
+can be `synccycles + opcode_cycles - 1`, max ~10 cycles of slack.
+
+Expected throughput delta on heavy ROMs: PRC + Timers sync phases are
+~23% of heavy-scene time and Sync is called 800/512 = 1.56× less often,
+so sync overhead drops ~36% × 23% ≈ **+5-8% projected throughput**.
+Pending device confirmation.
+
+### Going higher
+
+Above ~854 you'd need to chunk the increment inside `MinxPRC_Sync`
+(split a large `PokeHWCycles` into ≤854-cycle slices and re-check
+triggers between each), or rework the trigger windows to be edge-detect
+instead of range-check. Probably not worth it given how much the 800
+bump already buys.
+
+## Keepalive mechanism confirmed (2026-05-31)
+
+A/B tested K_BUSY (2000-iter `volatile` nop busy-loop, no syscalls)
+against the shipping 4× `getElapsedTime()` recipe on the same device,
+same Togepi JP scene, smooth+3x. Both at `synccycles = 800`. Same log
+block once-per-second in both.
+
+| Build | Steady median | Best window | Worst dip |
+|---|---|---|---|
+| Default (4× getElapsedTime) | ~27.0 fps | 28.7 | 19.4 |
+| K-busy (NOP loop) | ~27.0 fps | 28.9 | 18.0 |
+
+**Statistical parity.** The dip pattern differs slightly between runs
+(sprite-heavy moments hit at different frame offsets) but the
+steady-state range is identical.
+
+### Conclusion: M7 clock-state idle scaling
+
+The keepalive's per-update component is about the M7 core looking
+busy to the firmware. Any sustained per-update work prevents an
+idle-downclock. The specific syscall family is irrelevant — `volatile`
+NOPs work the same as `getElapsedTime`. NOTES's earlier "we don't
+fully understand why" can be retired: the mechanism is M7 DVFS-like
+behavior.
+
+### What's still load-bearing
+
+The **once-per-second format-rich `logToConsole`** is still load-
+bearing through a separate mechanism (likely a USB serial /
+scheduler tick). Constant-string logs don't work; the `%f`/`%.1f`
+formatting is what counts. Removing it caps fps around 12-14 even
+with the busy-loop running. Keep it.
+
+### What shipped
+
+`PokeMini_Playdate.c` keepalive block now uses the busy-loop directly
+(no `KEEPALIVE_VARIANT` CMake scaffold; that was diagnostic and is
+removed). Comment explains the two-mechanism reality:
+1. busy-loop → prevents M7 downclock
+2. once/sec format-rich log → keeps USB/scheduler tick warm
+
+### What's *not* recovered by this
+
+Identifying the mechanism didn't recover the ~1.4-1.5 fps deficit
+between this build and the no-EEPROM baseline. Both keepalive variants
+land in the same fps range, so the deficit is somewhere else — D-cache
+shifts from the .bss layout changes documented in "Baseline vs EEPROM
+build measurements" below.
+
 ## EEPROM via callback swap + linker-pinned update (2026-05-15)
 
 Architectural cleanup of the EEPROM commit. The previous "Branch predictor

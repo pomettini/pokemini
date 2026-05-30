@@ -37,6 +37,11 @@ set(POKEMINI_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../..)
 
 option(PD_OPCODE_DIAG_BUILD "Count Minx opcode frequency on device" OFF)
 option(PD_PERF_DIAG_BUILD "Measure Playdate update phase timings on device" OFF)
+# Experimental: relocate PM_RAM (8 KB) to the stack each frame so it lives in
+# the Playdate's zero-wait-state DTCM during emulation. Changes the PM_RAM
+# ABI from `uint8_t[]` to `uint8_t *` on Playdate builds when set. See
+# NOTES.md "PM_RAM in DTCM".
+option(POKEMINI_PM_RAM_DTCM "Relocate PM_RAM to DTCM-backed stack per frame" OFF)
 
 set(GAME_SOURCES
     PokeMini_Playdate.c
@@ -102,6 +107,10 @@ endif()
 
 if (PD_PERF_DIAG_BUILD)
     target_compile_definitions(${TARGET_NAME} PRIVATE PD_PERF_DIAG)
+endif()
+
+if (POKEMINI_PM_RAM_DTCM)
+    target_compile_definitions(${TARGET_NAME} PRIVATE POKEMINI_PM_RAM_DTCM=1)
 endif()
 
 if (TOOLCHAIN STREQUAL "armgcc")

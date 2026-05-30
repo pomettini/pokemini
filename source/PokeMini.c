@@ -1,5 +1,5 @@
 /*
-  PokeMini - Pokémon-Mini Emulator
+  PokeMini - Pokï¿½mon-Mini Emulator
   Copyright (C) 2009-2015  JustBurn
 
   This program is free software: you can redistribute it and/or modify
@@ -31,7 +31,16 @@ int PokeMini_FreeBIOS = 0;	// Using freebios?
 
 int PokeMini_Flags = 0;		// Configuration flags
 uint8_t PM_BIOS[4096];		// Pokemon-Mini BIOS ($000000 to $000FFF, 4096)
+#if defined(TARGET_PLAYDATE) && POKEMINI_PM_RAM_DTCM
+// Playdate experimental: PM_RAM is a pointer so the active buffer can be
+// relocated to the stack (which lives in zero-wait-state DTCM) at the start
+// of each update, then copied back at the end. See platform/playdate/NOTES.md
+// "PM_RAM in DTCM".
+uint8_t PM_RAM_storage[8192];	// .bss home of PM RAM contents
+uint8_t *PM_RAM = PM_RAM_storage;	// live pointer; redirected by update()
+#else
 uint8_t PM_RAM[8192];		// Pokemon-Mini RAM  ($001000 to $002100, 4096 + 256)
+#endif
 uint8_t *PM_ROM = NULL;		// Pokemon-Mini ROM  ($002100 to $1FFFFF, Up to 2MB)
 int PM_ROM_Alloc = 0;		// Pokemon-Mini ROM Allocated on memory?
 int PM_ROM_Size = 0;		// Pokemon-Mini ROM Size

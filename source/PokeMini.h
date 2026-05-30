@@ -70,7 +70,15 @@ extern int PokeMini_FreeBIOS;	// Using freebios?
 extern int PokeMini_Flags;	// Configuration flags
 extern int PokeMini_Rumbling;	// Pokemon-Mini is rumbling
 extern uint8_t PM_BIOS[];	// Pokemon-Mini BIOS ($000000 to $000FFF, 4096)
+#if defined(TARGET_PLAYDATE) && POKEMINI_PM_RAM_DTCM
+// Playdate experimental: PM_RAM is a redirectable pointer (see PokeMini.c
+// for rationale and platform/playdate/NOTES.md "PM_RAM in DTCM"). All
+// `PM_RAM[i]` access patterns still compile unchanged.
+extern uint8_t *PM_RAM;
+extern uint8_t PM_RAM_storage[8192];
+#else
 extern uint8_t PM_RAM[];	// Pokemon-Mini RAM  ($001000 to $002100, 4096 + 256)
+#endif
 extern uint8_t *PM_ROM;		// Pokemon-Mini ROM  ($002100 to $1FFFFF, Up to 2MB)
 extern int PM_ROM_Alloc;	// Pokemon-Mini ROM Allocated on memory?
 extern int PM_ROM_Size;		// Pokemon-Mini ROM Size
