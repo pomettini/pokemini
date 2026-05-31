@@ -30,6 +30,9 @@
 #include "Video_x1.h"
 #include "UI.h"
 
+#include "PokeMini_DTCM.h"
+#include "PokeMini_UserStack.h"
+
 PlaydateAPI *pd;  // non-static: shared with PokeMini_Playdate_EEPROM.c
 
 #ifdef PD_PERF_DIAG
@@ -194,6 +197,18 @@ static SoundSource *audio_source = NULL;
 static int audio_callback(void *context, int16_t *left, int16_t *right, int len);
 static int update(void *userdata);
 static int update_first_after_rom(void *userdata);
+
+#if POKEMINI_PM_RAM_DTCM
+// User-stack wrappers. The Playdate firmware-provided stack lives in DTCM
+// (top portion). If we put PM_RAM at the bottom of DTCM, the firmware
+// stack and PM_RAM can collide when our call chain grows. CrankBoy solves
+// this by switching to a separate user_stack[16 KB] in SDRAM before
+// running emulation. We do the same here: register these wrappers as the
+// Playdate update callback; they switch SP to user_stack and call the
+// real update via call_with_user_stack_1.
+static int update_userstack_wrapper(void *userdata);
+static int update_first_after_rom_userstack_wrapper(void *userdata);
+#endif
 
 static void stop_audio_source(void)
 {
@@ -835,9 +850,17 @@ static void start_emulation_with_rom(const char *path)
 	// after that runs the clean steady-state update(). Keeping the check OUT
 	// of update() leaves its hot-loop branches in the same BTB slots as the
 	// no-EEPROM baseline build. See NOTES.md "EEPROM via callback swap".
+#if POKEMINI_PM_RAM_DTCM
+	pd->system->setUpdateCallback(
+		StringIsSet(CommandLine.eeprom_file)
+		    ? update_first_after_rom_userstack_wrapper
+		    : update_userstack_wrapper,
+		pd);
+#else
 	pd->system->setUpdateCallback(
 		StringIsSet(CommandLine.eeprom_file) ? update_first_after_rom : update,
 		pd);
+#endif
 
 	// Match upstream PokeMini_LoadROM ordering: EEPROM is ready before the
 	// soft reset, then the reset performs BIOS/CPU setup and applies host RTC.
@@ -1031,30 +1054,58 @@ static int update(void *userdata)
 	unsigned int t0 = PDPerf_NowUs();
 #endif
 	{
-		// PM_RAM-in-DTCM experiment: relocate the active PM_RAM range onto
-		// the stack (which lives in zero-wait-state DTCM on the Playdate's
-		// Cortex-M7) for the duration of this update's PM emulation, then
-		// copy back. Only the active region 0x1000-0x20FF (= 0x1100 = 4352
-		// bytes) is mapped to PM hardware addresses — the upper half of the
-		// PM_RAM[8192] allocation is overprovisioning. Copying just the
-		// active range keeps stack usage well under the Playdate's budget
-		// (Beetle VB measured ~7.7 KB free; we want margin for the
-		// EmulateFrame call chain on top). See NOTES.md "PM_RAM in DTCM".
-		// Enable with -DPOKEMINI_PM_RAM_DTCM=1 at build time.
-#if POKEMINI_PM_RAM_DTCM
-		#define PM_RAM_ACTIVE_BYTES 0x1100  /* 4352, the in-use range */
-		uint8_t pm_ram_dtcm[PM_RAM_ACTIVE_BYTES] __attribute__((aligned(32)));
-		__builtin_memcpy(pm_ram_dtcm, PM_RAM_storage, PM_RAM_ACTIVE_BYTES);
-		uint8_t *pm_ram_save = PM_RAM;
-		PM_RAM = pm_ram_dtcm;
-#endif
+#if POKEMINI_ITCM_CALLBACKS
+		// ITCM hot-callback copy: memcpy the .itcm_pm region (containing
+		// MinxCPU_ITCMRead/Write) to a stack buffer (which lives in DTCM
+		// on the Playdate's Cortex-M7), repoint the g_pm_read/write
+		// function pointers at the stack copies, run emulation, restore.
+		// Pattern from Beetle VB / Red Viper. See NOTES.md
+		// "ITCM hot-callback copy".
+		extern uint8_t __itcm_pm_start[];
+		extern uint8_t __itcm_pm_end[];
+		extern uint8_t (*g_pm_read)(int, uint32_t);
+		extern void (*g_pm_write)(int, uint32_t, uint8_t);
+		extern uint8_t MinxCPU_ITCMRead(int, uint32_t);
+		extern void MinxCPU_ITCMWrite(int, uint32_t, uint8_t);
 
+		uintptr_t itcm_size = (uintptr_t)(__itcm_pm_end - __itcm_pm_start);
+		uint8_t stk_buf[1024] __attribute__((aligned(32)));
+		if (itcm_size <= sizeof(stk_buf)) {
+			__builtin_memcpy(stk_buf, __itcm_pm_start, itcm_size);
+			__asm__ volatile("dsb sy" ::: "memory");
+			__asm__ volatile("isb sy" ::: "memory");
+
+			// Compute offsets of each function within the .itcm_pm section,
+			// then add to stk_buf base. OR with 1 for Thumb mode.
+			uintptr_t read_off = (uintptr_t)MinxCPU_ITCMRead
+			                     - (uintptr_t)__itcm_pm_start;
+			uintptr_t write_off = (uintptr_t)MinxCPU_ITCMWrite
+			                     - (uintptr_t)__itcm_pm_start;
+			uint8_t (*saved_read)(int, uint32_t) = g_pm_read;
+			void (*saved_write)(int, uint32_t, uint8_t) = g_pm_write;
+			g_pm_read = (uint8_t (*)(int, uint32_t))
+			            (((uintptr_t)stk_buf + read_off) | 1);
+			g_pm_write = (void (*)(int, uint32_t, uint8_t))
+			            (((uintptr_t)stk_buf + write_off) | 1);
+
+			for (int i = 0; i < pm_frames; i++) PokeMini_EmulateFrame();
+
+			g_pm_read = saved_read;
+			g_pm_write = saved_write;
+		} else {
+			// Section grew beyond stk_buf budget — fall through, run with
+			// original (non-relocated) callbacks. Log once so we notice.
+			static int itcm_overflow_logged = 0;
+			if (!itcm_overflow_logged) {
+				pd->system->logToConsole(
+				    "ITCM section is %u bytes, exceeds stk_buf %u; running non-relocated",
+				    (unsigned)itcm_size, (unsigned)sizeof(stk_buf));
+				itcm_overflow_logged = 1;
+			}
+			for (int i = 0; i < pm_frames; i++) PokeMini_EmulateFrame();
+		}
+#else
 		for (int i = 0; i < pm_frames; i++) PokeMini_EmulateFrame();
-
-#if POKEMINI_PM_RAM_DTCM
-		__builtin_memcpy(PM_RAM_storage, pm_ram_dtcm, PM_RAM_ACTIVE_BYTES);
-		PM_RAM = pm_ram_save;
-		#undef PM_RAM_ACTIVE_BYTES
 #endif
 	}
 #ifdef PD_PERF_DIAG
@@ -1100,6 +1151,46 @@ static int update_first_after_rom(void *userdata)
 	return 1;
 }
 
+#if POKEMINI_PM_RAM_DTCM
+// PROBE: allocate just 256 bytes and write a sentinel pattern. If this
+// works (no crash), DTCM is usable for small allocations even though
+// 8 KB doesn't fit. We won't actually relocate PM_RAM — just verify
+// the DTCM region is accessible for small writes.
+static int pm_ram_dtcm_relocated = 0;
+static void pm_ram_dtcm_relocate_if_needed(void)
+{
+	if (pm_ram_dtcm_relocated) return;
+	pm_ram_dtcm_relocated = 1;
+
+	uint8_t *probe = dtcm_alloc_aligned(256, 32);
+	if (probe) {
+		pd->system->logToConsole(
+		    "DTCM probe: allocated 256 bytes at %p, writing...", probe);
+		for (int i = 0; i < 256; i++) probe[i] = (uint8_t)(i ^ 0xA5);
+		pd->system->logToConsole(
+		    "DTCM probe: write succeeded, first byte = 0x%02x", probe[0]);
+	} else {
+		pd->system->logToConsole("dtcm_alloc failed");
+	}
+}
+
+// Thin wrappers that bounce update() through call_with_user_stack_1 so
+// the actual emulation runs on user_stack (SDRAM) instead of the
+// firmware's DTCM stack. See PokeMini_UserStack.h.
+static int update_userstack_wrapper(void *userdata)
+{
+	// MINIMAL TRIVIAL WRAPPER: no DTCM activity, no user_stack, no probe.
+	// Just call update. If this still crashes when registered as callback,
+	// the issue is firmware-side and out of our control.
+	return update(userdata);
+}
+
+static int update_first_after_rom_userstack_wrapper(void *userdata)
+{
+	return update_first_after_rom(userdata);
+}
+#endif
+
 #ifdef _WINDLL
 __declspec(dllexport)
 #endif
@@ -1109,6 +1200,22 @@ int eventHandler(PlaydateAPI *playdate, PDSystemEvent event, uint32_t arg)
 
 	if (event == kEventInit) {
 		pd = playdate;
+
+#if POKEMINI_PM_RAM_DTCM
+		// Initialize the user-stack canaries; the actual switching is done
+		// inside the update_userstack_wrapper callbacks (see top of file).
+		init_user_stack();
+
+		// DTCM allocator: compute the boundary based on the current frame
+		// pointer. We DO NOT write to DTCM yet — kEventInit is firmware-
+		// boot-heavy and the firmware actively uses our target DTCM addresses
+		// during this window. The actual PM_RAM relocation is deferred to
+		// the first update() call (which runs on user_stack, well past
+		// firmware boot). See pm_ram_dtcm_relocate_if_needed() below.
+		dtcm_init(__builtin_frame_address(0));
+		pd->system->logToConsole(
+		    "DTCM mempool initialized at %p", dtcm_get_mempool());
+#endif
 
 		// 30 fps display rate; we emulate 2 PM frames per call
 		pd->display->setRefreshRate(30);
@@ -1218,7 +1325,11 @@ int eventHandler(PlaydateAPI *playdate, PDSystemEvent event, uint32_t arg)
 			start_emulation_with_rom(path);
 		} else {
 			app_mode = MODE_PICKER;
+#if POKEMINI_PM_RAM_DTCM
+			pd->system->setUpdateCallback(update_userstack_wrapper, pd);
+#else
 			pd->system->setUpdateCallback(update, pd);
+#endif
 		}
 
 	} else if (event == kEventPause) {

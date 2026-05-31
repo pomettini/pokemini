@@ -32,12 +32,14 @@ int PokeMini_FreeBIOS = 0;	// Using freebios?
 int PokeMini_Flags = 0;		// Configuration flags
 uint8_t PM_BIOS[4096];		// Pokemon-Mini BIOS ($000000 to $000FFF, 4096)
 #if defined(TARGET_PLAYDATE) && POKEMINI_PM_RAM_DTCM
-// Playdate experimental: PM_RAM is a pointer so the active buffer can be
-// relocated to the stack (which lives in zero-wait-state DTCM) at the start
-// of each update, then copied back at the end. See platform/playdate/NOTES.md
-// "PM_RAM in DTCM".
-uint8_t PM_RAM_storage[8192];	// .bss home of PM RAM contents
-uint8_t *PM_RAM = PM_RAM_storage;	// live pointer; redirected by update()
+/* Playdate experimental: PM_RAM is a pointer initialized at startup by
+ * eventHandler to a DTCM-backed buffer obtained from dtcm_alloc. See
+ * platform/playdate/PokeMini_DTCM.h and NOTES.md "PM_RAM in DTCM via
+ * runtime allocator". The fallback storage (PM_RAM_storage) keeps the
+ * 8 KB buffer in .bss in case dtcm_alloc fails (e.g., during static
+ * initialization before dtcm_init has run). */
+uint8_t PM_RAM_storage[8192];
+uint8_t *PM_RAM = PM_RAM_storage;
 #else
 uint8_t PM_RAM[8192];		// Pokemon-Mini RAM  ($001000 to $002100, 4096 + 256)
 #endif

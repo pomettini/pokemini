@@ -37,11 +37,17 @@ set(POKEMINI_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../..)
 
 option(PD_OPCODE_DIAG_BUILD "Count Minx opcode frequency on device" OFF)
 option(PD_PERF_DIAG_BUILD "Measure Playdate update phase timings on device" OFF)
-# Experimental: relocate PM_RAM (8 KB) to the stack each frame so it lives in
-# the Playdate's zero-wait-state DTCM during emulation. Changes the PM_RAM
-# ABI from `uint8_t[]` to `uint8_t *` on Playdate builds when set. See
-# NOTES.md "PM_RAM in DTCM".
-option(POKEMINI_PM_RAM_DTCM "Relocate PM_RAM to DTCM-backed stack per frame" OFF)
+# Experimental: place PM_RAM (8 KB) in DTCM at 0x20000000 via linker section
+# attribute. Direct hardware-level zero-wait-state placement, no stack
+# relocation. Risk: stack collision if firmware grows stack into the bottom
+# of DTCM. See NOTES.md "PM_RAM in DTCM via linker placement".
+option(POKEMINI_PM_RAM_DTCM "Place PM_RAM in hardware DTCM via linker" OFF)
+# Experimental: Beetle VB / Red Viper-style ITCM hot-callback copy. A
+# relocatable version of MinxCPU_OnRead/OnWrite is placed in the
+# .itcm_pm section and memcpy'd into a stack buffer at frame start.
+# The dispatcher calls the copies via a function pointer. See
+# NOTES.md "ITCM hot-callback copy" and PokeMini_ITCMCallbacks.c.
+option(POKEMINI_ITCM_CALLBACKS "Per-frame copy hot memory callbacks to stack DTCM" OFF)
 
 set(GAME_SOURCES
     PokeMini_Playdate.c
@@ -51,6 +57,9 @@ set(GAME_SOURCES
     ${POKEMINI_ROOT}/source/Multicart.c
     ${POKEMINI_ROOT}/source/Hardware.c
     PokeMini_Playdate_EEPROM.c
+    PokeMini_ITCMCallbacks.c
+    PokeMini_DTCM.c
+    PokeMini_UserStack.c
     ${POKEMINI_ROOT}/source/Video.c
     ${POKEMINI_ROOT}/source/Video_x1.c
     ${POKEMINI_ROOT}/source/CommandLine.c
@@ -111,6 +120,15 @@ endif()
 
 if (POKEMINI_PM_RAM_DTCM)
     target_compile_definitions(${TARGET_NAME} PRIVATE POKEMINI_PM_RAM_DTCM=1)
+endif()
+
+if (POKEMINI_ITCM_CALLBACKS)
+    target_compile_definitions(${TARGET_NAME} PRIVATE POKEMINI_ITCM_CALLBACKS=1)
+    # Force the ITCM callbacks file to compile without PC-relative jump
+    # tables — those would break under memcpy relocation. The compile
+    # option only applies to the one source file.
+    set_source_files_properties(PokeMini_ITCMCallbacks.c
+        PROPERTIES COMPILE_OPTIONS "-fno-jump-tables")
 endif()
 
 if (TOOLCHAIN STREQUAL "armgcc")

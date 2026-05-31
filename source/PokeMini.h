@@ -71,9 +71,8 @@ extern int PokeMini_Flags;	// Configuration flags
 extern int PokeMini_Rumbling;	// Pokemon-Mini is rumbling
 extern uint8_t PM_BIOS[];	// Pokemon-Mini BIOS ($000000 to $000FFF, 4096)
 #if defined(TARGET_PLAYDATE) && POKEMINI_PM_RAM_DTCM
-// Playdate experimental: PM_RAM is a redirectable pointer (see PokeMini.c
-// for rationale and platform/playdate/NOTES.md "PM_RAM in DTCM"). All
-// `PM_RAM[i]` access patterns still compile unchanged.
+// Playdate experimental: PM_RAM is a pointer redirected at startup to a
+// DTCM-backed buffer (see PokeMini.c and platform/playdate/PokeMini_DTCM.h).
 extern uint8_t *PM_RAM;
 extern uint8_t PM_RAM_storage[8192];
 #else

@@ -63,6 +63,19 @@ SECTIONS
 		/* Remaining PokeMini_Playdate.c sections (cold paths). */
 		*(.text.*)
 
+		/* ITCM-style relocatable callbacks. Grouped contiguously and
+		 * bracketed by __itcm_pm_start/end markers so PokeMini_Playdate.c
+		 * update() can memcpy the whole region to a stack buffer. The
+		 * code in .itcm_pm must be relocatable: no PC-relative BL to
+		 * external functions (use function pointers for those instead),
+		 * compiled with -fno-jump-tables. See PokeMini_ITCMCallbacks.c. */
+		. = ALIGN(32);
+		__itcm_pm_start = .;
+		*(.itcm_pm)
+		*(.itcm_pm.*)
+		. = ALIGN(32);
+		__itcm_pm_end = .;
+
 		KEEP(*(.init))
 		KEEP(*(.fini))
 

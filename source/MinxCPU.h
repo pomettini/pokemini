@@ -168,6 +168,13 @@ uint8_t MinxCPU_FastRead(int cpu, uint32_t addr);
 void MinxCPU_FastWrite(int cpu, uint32_t addr, uint8_t data);
 #define MINXCPU_READ(cpu, addr) MinxCPU_FastRead(cpu, addr)
 #define MINXCPU_WRITE(cpu, addr, data) MinxCPU_FastWrite(cpu, addr, data)
+#elif defined(TARGET_PLAYDATE) && POKEMINI_ITCM_CALLBACKS
+// Indirect through function pointers so update() can repoint to a stack
+// copy of the callbacks each frame. See PokeMini_ITCMCallbacks.c.
+extern uint8_t (*g_pm_read)(int, uint32_t);
+extern void (*g_pm_write)(int, uint32_t, uint8_t);
+#define MINXCPU_READ(cpu, addr) g_pm_read(cpu, addr)
+#define MINXCPU_WRITE(cpu, addr, data) g_pm_write(cpu, addr, data)
 #else
 #define MINXCPU_READ(cpu, addr) MinxCPU_OnRead(cpu, addr)
 #define MINXCPU_WRITE(cpu, addr, data) MinxCPU_OnWrite(cpu, addr, data)

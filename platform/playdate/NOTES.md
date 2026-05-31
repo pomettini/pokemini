@@ -4,6 +4,172 @@ Living document of bugs found, fixes applied, and gotchas learned while porting
 the PokeMini emulator to the Playdate. Update this whenever something
 non-obvious is discovered. Newest entries on top.
 
+## DTCM / ITCM negative results, full exploration (2026-05-31)
+
+Inspired by CrankBoy's documented DTCM/ITCM benefits, we did a thorough
+exploration of placing PokeMini hot data/code in DTCM. **All approaches
+failed on the user's Rev A Playdate.**
+
+### Approaches tried
+
+| Approach | Outcome |
+|---|---|
+| Stack-relocate PM_RAM (8 KB array on `update()` stack) | Stack overflow at game load |
+| Stack-relocate PM_RAM (4 KB) | Stack overflow at game load |
+| Static linker placement at `0x20000000` | Crash on boot (firmware uses bottom of DTCM) |
+| Static linker placement at `0x20010000` | Crash on boot (inside firmware stack region) |
+| Runtime allocator at `frame_ptr - 10 KB` (= `0x200073C0`), 8 KB write at boot | Crash on boot |
+| Same address, deferred 8 KB write to first update() | Crash on boot |
+| Same address, **256-byte** write to first update() | Crash on boot |
+| Same address, **no DTCM write at all** (init only) | **WORKS** |
+| Same as above + wrapper function layer registered as callback | **WORKS** |
+
+### Conclusion
+
+**Any write of any size to `0x200073C0` (the DTCM address we compute via
+CrankBoy's `frame_ptr - PLAYDATE_STACK_SIZE` formula) crashes the firmware
+on this Rev A device.** No write = no crash. The crash isn't about the
+data we write, the timing, or the size — it's about that specific
+address range being firmware-active on Rev A.
+
+### Why CrankBoy works and we don't
+
+CrankBoy's own source comments acknowledge: *"0x2710 is currently used to
+avoid occasional DTCM crashes on RevA."* They've empirically tuned for a
+specific stack depth at their `dtcm_set_mempool` call. Their `main.c`
+does many things between firmware boot and the `dtcm_set_mempool` call
+(`init_user_stack`, `srand`, `exec_array` for init arrays, `pd_revcheck`,
+user stack test) which all push the stack deeper than ours, putting their
+mempool at a DIFFERENT (and apparently safer) address.
+
+Replicating this exactly would require matching their startup flow,
+which is invasive and provides no signal that we'd land on a safe
+address either.
+
+### Mechanism understood, not implementable here
+
+We learned:
+- The Playdate firmware stack lives in DTCM (top, growing down)
+- Available "free" DTCM is below the stack region
+- The SDK reserves 60 KB stack but actual usage is far less; the gap is
+  CrankBoy's playground
+- On Rev A the firmware actively uses specific DTCM addresses outside
+  the stack region in ways the SDK doesn't document
+
+What we CAN'T do without firmware-side debugging:
+- Find which DTCM addresses are safe to use on Rev A
+- Establish a stable way to allocate DTCM without rolling the
+  device-specific dice
+
+### Files left in tree (gated off by default)
+
+- `PokeMini_DTCM.c/.h` — runtime mempool allocator, CrankBoy pattern
+- `PokeMini_UserStack.c/.h` — separate stack switching via inline asm
+- `PokeMini_ITCMCallbacks.c` — relocatable memory callbacks
+- `POKEMINI_PM_RAM_DTCM`, `POKEMINI_ITCM_CALLBACKS` CMake flags
+
+All scaffolding is gated behind off-by-default CMake options. The
+shipping build is unaffected. Re-enable for future revisits if Rev B
+testing happens, or if someone with firmware-debug access wants to
+probe safe addresses.
+
+### Measured cost of the scaffolding (even with no DTCM writes)
+
+Race Mini full lap, `POKEMINI_PM_RAM_DTCM=1` build with the trivial
+wrapper and NO DTCM activity (only PM_RAM-as-pointer ABI):
+
+- Steady-state median: **~18.5-18.7 fps**
+- Baseline (regular build): **~19.1 fps**
+- **Net: ~0.5 fps regression**
+
+Cause: `PM_RAM` as a `uint8_t *` (vs `uint8_t[]`) adds one LDR
+instruction per PM_RAM access — the compiler must load the pointer
+before computing the indexed address. Race Mini does millions of
+PM_RAM accesses per second; cumulative cost is measurable.
+
+This matches Beetle VB / Red Viper's prior findings on the same
+pattern. The scaffolding has a baseline tax that the DTCM benefit
+would need to overcome to break even. Since DTCM writes crash on
+Rev A, we never get to test the upside.
+
+### Phase data still applies
+
+The original phase split for Race Mini holds: 84% CPU dispatch, 11% PRC
++ Timers sync, ~1% render. Even if DTCM had worked, it would only have
+helped the memory-load portion of dispatch, which is a small fraction
+of the 84%. The performance ceiling for PokeMini on M7 Rev A appears
+to be the **interpreter dispatch itself**, not memory latency. JIT is
+the only remaining structural lever and it's explicitly out of scope.
+
+## Race Mini phase profile + DTCM negative result (2026-05-31)
+
+Pokemon Race Mini steady-state ~19 fps (vs Togepi 27 fps) is the heaviest
+case on the platform. PD_PERF_DIAG measurements during a steady lap (after
+adjusting for the diag instrumentation's own ~75% overhead):
+
+| Phase | % of update |
+|---|---|
+| MinxCPU_Exec dispatch loop | **84%** |
+| └ main XX opcodes | 65% of CPU |
+| └ CE prefix dispatch | 25% of CPU |
+| └ CF prefix dispatch | 10% of CPU |
+| MinxTimers_Sync | 5% |
+| MinxPRC_Sync | 6.5% |
+| Emu loop overhead | 3.4% |
+| render_screen + input + misc | <1% |
+
+PD_OPCODE_DIAG steady-state distribution: **E7 (22.7%) + 95 (20.9%)** dominate
+main-XX dispatch — together 43% of all CPU work. CE prefix internals are
+flat (40, 28, D0 each 10-17% of CE). CF is dominated by B1/B5 (60% of CF
+combined) which already have stack-local paths per NOTES.
+
+### Why DTCM is the wrong lever here
+
+PM_RAM is 4 KB + 256 B and very hot, so on paper relocating it to DTCM (per
+Beetle VB's ITCM-hot-callback-copy pattern) looks promising. **But the phase
+data says it isn't.** 84% of frame time is *opcode dispatch* — the switch
+table, opcode bodies, per-call overhead — not data loads. DTCM accelerates
+memory access, not interpreter throughput. PM_RAM is small enough to likely
+be M7-D-cache-resident already.
+
+This matches Red Viper's negative DTCM result (interpreter throughput
+limited, working set fits in cache) more than Beetle VB's modest positive
+(callback-funnelled core, hot data outside cache).
+
+### DTCM attempt + stack-budget finding (negative result)
+
+Tried the stack-relocation pattern anyway (per user request):
+`PM_RAM[8192]` copied to `uint8_t pm_ram_dtcm[N]` on the stack at update
+entry, `PM_RAM` global pointer redirected, copied back at end. Changed
+`PM_RAM` from array to pointer ABI behind `-DPOKEMINI_PM_RAM_DTCM=1`.
+
+- **8 KB buffer (full PM_RAM size): stack overflow on game load.**
+- **4352 B buffer (only the active 0x1000-0x20FF range): also stack
+  overflow.**
+
+The Playdate stack budget for PokeMini's call chain is **less than 4 KB**.
+This is unexpectedly tight — Beetle VB (under FreeRTOS) fit a 1 KB buffer,
+2 KB overflowed. PokeMini is bare-metal so we expected more headroom; we
+have less. Hypothesis: PokeMini_EmulateFrame's call chain
+(`EmulateFrame → MinxCPU_Exec → opcode handler → Fetch8 → MinxCPU_OnRead`,
+with CE/CF prefix dispatchers adding 2-3 frames per opcode) is deeper than
+Beetle VB's V810 interpreter, eating most of the stack budget.
+
+### Conclusion
+
+The DTCM-for-PM_RAM lever is **not viable** without moving to a fixed-
+address DTCM region via linker script, which would risk colliding with the
+firmware's stack (Beetle VB measured stack reaching down to `0x20000060`).
+The infrastructure is reverted. Confirmed for the record: even if it had
+fit, the phase data predicted it wouldn't have helped meaningfully.
+
+**What would help Race Mini** is opcode-dispatch reduction, not memory-
+latency. E7 (22.7%) is the largest unmet target — previously tried via
+local-read inlining and reverted due to dispatcher I-cache pressure. Next
+experiment: E7 retry via a different structural choice (case reorder /
+early-exit at top of switch) that doesn't grow the per-case bodies.
+
+
 ## synccycles ceiling: PRCCnt window skipping (2026-05-15)
 
 Older notes treat `synccycles = 512` as an empirical hardware ceiling
