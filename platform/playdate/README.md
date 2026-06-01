@@ -37,8 +37,8 @@ In-game saves (the cartridge's EEPROM) are written to `/Shared/Emulation/pm/save
 
 - **LCD Mode**: `Soft` (default) smooths the greys, to mimic the
   original screen. `Fast` is slightly faster (duh!) but greys will flicker.
-- **Scale**: `3x` (default) is pixel-perfect with a black border. `3.5x`
-  fills the whole screen but stretches.
+- **Scale**: `3x` (default) is pixel-perfect with a black border. `3.75x`
+  fills the screen vertically but stretches.
 
 ## Credits
 

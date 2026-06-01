@@ -167,14 +167,18 @@ int UIItems_PlatformC(int index, int reason)
 #define SCALE_3X_X  ((LCD_COLUMNS - SCALE_3X_W) / 2)  // 56
 #define SCALE_3X_Y  ((LCD_ROWS    - SCALE_3X_H) / 2)  // 24
 
-#define SCALE_35X_W  336
-#define SCALE_35X_H  224
-#define SCALE_35X_X  ((LCD_COLUMNS - SCALE_35X_W) / 2)  // 32
-#define SCALE_35X_Y  ((LCD_ROWS    - SCALE_35X_H) / 2)  // 8
+// 3.75x fills the screen vertically (64*3.75 = 240 = LCD_ROWS). Width is
+// 96*3.75 = 360 = 45 bytes, byte-aligned. True-center X would be 20 px,
+// which is not byte-aligned; we use 16 (4 px left of center) so each dst
+// row is a direct memcpy of 45 bytes.
+#define SCALE_375X_W  360
+#define SCALE_375X_H  240
+#define SCALE_375X_X  16
+#define SCALE_375X_Y  0
 
 enum {
 	RENDER_SCALE_3X,
-	RENDER_SCALE_35X,
+	RENDER_SCALE_375X,
 };
 
 // ROM buffer allocated via Playdate file API (fopen is unsupported on device)
@@ -237,7 +241,7 @@ static void start_audio_source(void)
 static PDMenuItem *lcd_mode_menu_item = NULL;
 static const char *lcd_mode_options[] = { "Soft", "Fast" };
 static PDMenuItem *screen_scale_menu_item = NULL;
-static const char *screen_scale_options[] = { "3x", "3.5x" };
+static const char *screen_scale_options[] = { "3x", "3.75x" };
 static int screen_scale_mode = RENDER_SCALE_3X;
 
 // C is held while the crank sits in this undocked angle zone. This avoids
@@ -403,57 +407,60 @@ static void handle_input(void)
 // direct byte stores instead of per-pixel read-modify-writes.
 static uint8_t expand_lut_3x[256][3];
 
-// Same idea for the 3.5x scale. One PM byte (8 src bits) expands to 28
-// dst bits using a 3,4,3,4,3,4,3,4 width pattern per src bit (total
-// 8*(3+4)/2 = 28 bits = "3.5 dst bytes" per src byte). Both halves of an
-// expand_pair_35x call use the same pattern, so a single 256-entry table
-// is enough — packed in the low 28 bits of a uint32_t. ~1 KB rodata.
-static uint32_t expand_lut_35x[256];
+// Same idea for the 3.75x scale. One PM byte (8 src bits) expands to 30
+// dst bits using a 4,4,4,3,4,4,4,3 width pattern per src bit (per 4 src
+// bits: widths 4+4+4+3 = 15 dst bits; per byte: 30 dst bits). Packed in
+// the low 30 bits of a uint32_t. ~1 KB rodata.
+static uint32_t expand_lut_375x[256];
 
 static void init_expand_lut(void)
 {
 	for (int i = 0; i < 256; i++) {
 		uint32_t bits3 = 0;
-		uint32_t bits35 = 0;
+		uint32_t bits375 = 0;
 		for (int b = 0; b < 8; b++) {
-			int width = (b & 1) ? 4 : 3;
-			bits35 <<= width;
+			int width = ((b & 3) == 3) ? 3 : 4;
+			bits375 <<= width;
 			if ((i >> (7 - b)) & 1) {
 				// MSB-first to match Playdate framebuffer layout.
 				bits3 |= (uint32_t)0x7 << (24 - 3 - b * 3);
-				bits35 |= (uint32_t)((1u << width) - 1u);
+				bits375 |= (uint32_t)((1u << width) - 1u);
 			}
 		}
 		expand_lut_3x[i][0] = (uint8_t)(bits3 >> 16);
 		expand_lut_3x[i][1] = (uint8_t)(bits3 >> 8);
 		expand_lut_3x[i][2] = (uint8_t)(bits3);
-		expand_lut_35x[i] = bits35;
+		expand_lut_375x[i] = bits375;
 	}
 }
 
-static void expand_pair_35x(uint8_t b0, uint8_t b1, uint8_t *dst)
+static void expand_quad_375x(uint8_t b0, uint8_t b1, uint8_t b2, uint8_t b3,
+                             uint8_t *dst)
 {
-	// Combine two 28-bit halves into a single 56-bit value:
-	//   bits 55..28 from b0, bits 27..0 from b1.
-	uint32_t e0 = expand_lut_35x[b0];
-	uint32_t e1 = expand_lut_35x[b1];
+	// 4 src bytes (32 bits) -> 120 dst bits = 15 dst bytes, byte-aligned.
+	// Each src byte contributes 30 bits in the low part of its uint32_t.
+	// Combined 120-bit output, MSB-first:
+	//   bits 119..90 from e0, 89..60 from e1, 59..30 from e2, 29..0 from e3.
+	uint32_t e0 = expand_lut_375x[b0];
+	uint32_t e1 = expand_lut_375x[b1];
+	uint32_t e2 = expand_lut_375x[b2];
+	uint32_t e3 = expand_lut_375x[b3];
 
-	// Unpack to 7 bytes without touching uint64. e0 lives in bits 27..0
-	// of a uint32; in the combined 56-bit output it occupies bits 55..28.
-	//   byte 0: bits 55..48 = e0[27..20]
-	//   byte 1: bits 47..40 = e0[19..12]
-	//   byte 2: bits 39..32 = e0[11..4]
-	//   byte 3: bits 31..24 = e0[3..0] (high nibble) | e1[27..24] (low)
-	//   byte 4: bits 23..16 = e1[23..16]
-	//   byte 5: bits 15..8  = e1[15..8]
-	//   byte 6: bits 7..0   = e1[7..0]
-	dst[0] = (uint8_t)(e0 >> 20);
-	dst[1] = (uint8_t)(e0 >> 12);
-	dst[2] = (uint8_t)(e0 >> 4);
-	dst[3] = (uint8_t)((e0 << 4) | (e1 >> 24));
-	dst[4] = (uint8_t)(e1 >> 16);
-	dst[5] = (uint8_t)(e1 >> 8);
-	dst[6] = (uint8_t)(e1);
+	dst[ 0] = (uint8_t)(e0 >> 22);
+	dst[ 1] = (uint8_t)(e0 >> 14);
+	dst[ 2] = (uint8_t)(e0 >>  6);
+	dst[ 3] = (uint8_t)((e0 << 2) | (e1 >> 28));
+	dst[ 4] = (uint8_t)(e1 >> 20);
+	dst[ 5] = (uint8_t)(e1 >> 12);
+	dst[ 6] = (uint8_t)(e1 >>  4);
+	dst[ 7] = (uint8_t)((e1 << 4) | (e2 >> 26));
+	dst[ 8] = (uint8_t)(e2 >> 18);
+	dst[ 9] = (uint8_t)(e2 >> 10);
+	dst[10] = (uint8_t)(e2 >>  2);
+	dst[11] = (uint8_t)((e2 << 6) | (e3 >> 24));
+	dst[12] = (uint8_t)(e3 >> 16);
+	dst[13] = (uint8_t)(e3 >>  8);
+	dst[14] = (uint8_t)(e3);
 }
 
 // Threshold lookups for the analog render path. MinxLCD_DecayRefresh keeps
@@ -606,22 +613,24 @@ static void render_screen_3x(uint8_t *fb)
 	pd->graphics->markUpdatedRows(SCALE_3X_Y, SCALE_3X_Y + SCALE_3X_H - 1);
 }
 
-static void render_screen_35x(uint8_t *fb)
+static void render_screen_375x(uint8_t *fb)
 {
-	const int byte_x = SCALE_35X_X / 8;
+	const int byte_x = SCALE_375X_X / 8;
 	const int pm_bytes = PM_W / 8;
 	uint8_t row[PM_W / 8];
-	uint8_t scaled_row[SCALE_35X_W / 8];
-	int dst_y = SCALE_35X_Y;
+	uint8_t scaled_row[SCALE_375X_W / 8];
+	int dst_y = SCALE_375X_Y;
 
 	for (int y = 0; y < PM_H; y++) {
 		build_pm_row_bits(y, row);
-		for (int pair = 0; pair < pm_bytes / 2; pair++) {
-			expand_pair_35x(row[pair * 2], row[pair * 2 + 1],
-			                &scaled_row[pair * 7]);
+		for (int quad = 0; quad < pm_bytes / 4; quad++) {
+			expand_quad_375x(row[quad * 4 + 0], row[quad * 4 + 1],
+			                 row[quad * 4 + 2], row[quad * 4 + 3],
+			                 &scaled_row[quad * 15]);
 		}
 
-		const int repeats = (y & 1) ? 4 : 3;
+		// Per 4 src rows: 4,4,4,3 repeats = 15 dst rows. 64*15/4 = 240.
+		const int repeats = ((y & 3) == 3) ? 3 : 4;
 		for (int r = 0; r < repeats; r++) {
 			uint8_t *dst = fb + (dst_y + r) * LCD_ROWSIZE + byte_x;
 			memcpy(dst, scaled_row, sizeof(scaled_row));
@@ -629,7 +638,7 @@ static void render_screen_35x(uint8_t *fb)
 		dst_y += repeats;
 	}
 
-	pd->graphics->markUpdatedRows(SCALE_35X_Y, SCALE_35X_Y + SCALE_35X_H - 1);
+	pd->graphics->markUpdatedRows(SCALE_375X_Y, SCALE_375X_Y + SCALE_375X_H - 1);
 }
 
 static void render_screen(void)
@@ -646,7 +655,7 @@ static void render_screen(void)
 	if (screen_scale_mode == RENDER_SCALE_3X)
 		render_screen_3x(fb);
 	else
-		render_screen_35x(fb);
+		render_screen_375x(fb);
 }
 
 // --- ROM picker -----------------------------------------------------------
@@ -929,7 +938,7 @@ static void menu_item_screen_scale_cb(void *userdata)
 	if (!screen_scale_menu_item) return;
 
 	int new_scale = pd->system->getMenuItemValue(screen_scale_menu_item)
-		? RENDER_SCALE_35X : RENDER_SCALE_3X;
+		? RENDER_SCALE_375X : RENDER_SCALE_3X;
 	if (screen_scale_mode == new_scale) return;
 
 	screen_scale_mode = new_scale;
