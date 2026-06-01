@@ -243,6 +243,8 @@ static const char *lcd_mode_options[] = { "Soft", "Fast" };
 static PDMenuItem *screen_scale_menu_item = NULL;
 static const char *screen_scale_options[] = { "3x", "3.75x" };
 static int screen_scale_mode = RENDER_SCALE_375X;
+static PDMenuItem *fps_menu_item = NULL;
+static int fps_visible = 0;
 
 // C is held while the crank sits in this undocked angle zone. This avoids
 // using the dock/undock mechanism itself as a gameplay button.
@@ -824,6 +826,43 @@ static void render_picker(void)
 // path leaves SYS_CTRL3 in a state where the cart can stall before enabling
 // the PRC 72 Hz interrupt), then ApplyChanges to commit any CommandLine
 // tweaks the picker may have changed.
+static void menu_item_picker_cb(void *userdata);
+static void menu_item_lcd_mode_cb(void *userdata);
+static void menu_item_screen_scale_cb(void *userdata);
+static void menu_item_fps_cb(void *userdata);
+
+// Playdate caps the system-menu custom items at 3. Different items make sense
+// in the two app modes: the "ROM Picker" jump is redundant while we're already
+// in the picker, and the FPS toggle is uninteresting once the player is in a
+// game (and there's no slot for it then). Rebuild the menu on each transition.
+static void rebuild_system_menu(void)
+{
+	pd->system->removeAllMenuItems();
+	lcd_mode_menu_item = NULL;
+	screen_scale_menu_item = NULL;
+	fps_menu_item = NULL;
+
+	if (app_mode == MODE_PICKER) {
+		fps_menu_item = pd->system->addCheckmarkMenuItem(
+			"Show FPS", fps_visible, menu_item_fps_cb, NULL);
+	} else {
+		pd->system->addMenuItem("ROM Picker", menu_item_picker_cb, NULL);
+	}
+
+	lcd_mode_menu_item = pd->system->addOptionsMenuItem(
+		"LCD Mode", lcd_mode_options, 2, menu_item_lcd_mode_cb, NULL);
+	if (lcd_mode_menu_item) {
+		pd->system->setMenuItemValue(lcd_mode_menu_item,
+			CommandLine.lcdmode == LCDMODE_2SHADES ? 1 : 0);
+	}
+	screen_scale_menu_item = pd->system->addOptionsMenuItem(
+		"Scale", screen_scale_options, 2, menu_item_screen_scale_cb, NULL);
+	if (screen_scale_menu_item) {
+		pd->system->setMenuItemValue(screen_scale_menu_item,
+			screen_scale_mode == RENDER_SCALE_375X ? 1 : 0);
+	}
+}
+
 static void start_emulation_with_rom(const char *path)
 {
 	// If switching ROMs mid-session, flush the current EEPROM before it
@@ -897,6 +936,7 @@ static void start_emulation_with_rom(const char *path)
 
 	LCDDirty = 1;
 	app_mode = MODE_EMULATOR;
+	rebuild_system_menu();
 	start_audio_source();
 }
 
@@ -909,7 +949,58 @@ static void return_to_picker(void)
 	rom_cursor = 0;
 	rom_view_top = 0;
 	app_mode = MODE_PICKER;
+	rebuild_system_menu();
 	stop_audio_source();
+}
+
+// User-toggleable settings persist to the app's Data directory across runs.
+// Tiny key=value text file so adding/removing keys later doesn't break old
+// installs (unknown keys are ignored, missing keys keep their compiled-in
+// default).
+#define SETTINGS_FILE "settings.cfg"
+
+static void save_settings(void)
+{
+	SDFile *f = pd->file->open(SETTINGS_FILE, kFileWrite);
+	if (!f) {
+		pd->system->logToConsole("%s: settings save failed (open)", AppName);
+		return;
+	}
+	char buf[128];
+	int n = snprintf(buf, sizeof(buf),
+	                 "fps=%d\nscale=%d\nlcd=%d\n",
+	                 fps_visible,
+	                 screen_scale_mode == RENDER_SCALE_375X ? 1 : 0,
+	                 CommandLine.lcdmode == LCDMODE_2SHADES ? 0 : 1);
+	if (n > 0) pd->file->write(f, buf, (unsigned int)n);
+	pd->file->close(f);
+}
+
+static void load_settings(void)
+{
+	SDFile *f = pd->file->open(SETTINGS_FILE, kFileRead | kFileReadData);
+	if (!f) return;  // first run, keep defaults
+
+	char buf[256];
+	int n = pd->file->read(f, buf, sizeof(buf) - 1);
+	pd->file->close(f);
+	if (n <= 0) return;
+	buf[n] = 0;
+
+	char *line = buf;
+	while (line && *line) {
+		char *nl = strchr(line, '\n');
+		if (nl) *nl = 0;
+		char *eq = strchr(line, '=');
+		if (eq) {
+			*eq = 0;
+			int v = atoi(eq + 1);
+			if (!strcmp(line, "fps"))   fps_visible = v ? 1 : 0;
+			else if (!strcmp(line, "scale")) screen_scale_mode = v ? RENDER_SCALE_375X : RENDER_SCALE_3X;
+			else if (!strcmp(line, "lcd"))   CommandLine.lcdmode = v ? LCDMODE_ANALOG : LCDMODE_2SHADES;
+		}
+		line = nl ? nl + 1 : NULL;
+	}
 }
 
 static void menu_item_picker_cb(void *userdata)
@@ -930,6 +1021,17 @@ static void menu_item_lcd_mode_cb(void *userdata)
 	CommandLine.lcdmode = new_mode;
 	PokeMini_ApplyChanges();
 	LCDDirty = MINX_DIRTYSCR;
+	save_settings();
+}
+
+static void menu_item_fps_cb(void *userdata)
+{
+	(void)userdata;
+	if (!fps_menu_item) return;
+	int new_val = pd->system->getMenuItemValue(fps_menu_item) ? 1 : 0;
+	if (new_val == fps_visible) return;
+	fps_visible = new_val;
+	save_settings();
 }
 
 static void menu_item_screen_scale_cb(void *userdata)
@@ -946,6 +1048,7 @@ static void menu_item_screen_scale_cb(void *userdata)
 	memset(fb, 0x00, (size_t)(LCD_ROWSIZE * LCD_ROWS));
 	pd->graphics->markUpdatedRows(0, LCD_ROWS - 1);
 	LCDDirty = MINX_DIRTYSCR;
+	save_settings();
 }
 
 static void picker_update(void)
@@ -1143,6 +1246,8 @@ static int update(void *userdata)
 	}
 #endif
 
+	if (fps_visible) pd->system->drawFPS(0, 0);
+
 	return 1;
 }
 
@@ -1257,6 +1362,12 @@ int eventHandler(PlaydateAPI *playdate, PDSystemEvent event, uint32_t arg)
 		// ceiling: PRCCnt window skipping".
 		CommandLine.synccycles = 800;
 
+		// Apply persisted user settings (LCD mode, scale, FPS overlay) on top
+		// of the compiled-in defaults so the menu indicators come up matching
+		// the saved state on next launch. Must run before PokeMini_SetVideo
+		// (which reads CommandLine.lcdmode) and before rebuild_system_menu.
+		load_settings();
+
 		JoystickSetup("Playdate", 0, 30000, PD_KeysNames, 7, PD_KeysMapping);
 
 		// 1x video spec (96x64 output), 16bpp, no LCD filter, 2-shade mode
@@ -1301,22 +1412,11 @@ int eventHandler(PlaydateAPI *playdate, PDSystemEvent event, uint32_t arg)
 		// is up. Creating it at the emulation transition avoids occasional
 		// silent-source behavior observed on device after layout-only rebuilds.
 
-		// System menu item: lets the player return to the ROM picker without
-		// quitting the app. Persists for the lifetime of the process.
-		pd->system->addMenuItem("ROM Picker", menu_item_picker_cb, NULL);
-		lcd_mode_menu_item = pd->system->addOptionsMenuItem(
-			"LCD Mode", lcd_mode_options, 2, menu_item_lcd_mode_cb, NULL);
-		if (lcd_mode_menu_item) {
-			// Fast (LCDMODE_2SHADES) is the default for best performance.
-			// Soft enables analog decay for smoother greys at a fps cost.
-			pd->system->setMenuItemValue(lcd_mode_menu_item, 1);
-		}
-		screen_scale_menu_item = pd->system->addOptionsMenuItem(
-			"Scale", screen_scale_options, 2, menu_item_screen_scale_cb, NULL);
-		if (screen_scale_menu_item) {
-			// 3.75x is the default — fills the screen vertically.
-			pd->system->setMenuItemValue(screen_scale_menu_item, 1);
-		}
+		// At startup app_mode == MODE_PICKER, so this installs the picker
+		// variant of the menu (FPS toggle + LCD Mode + Scale). When a ROM
+		// is launched start_emulation_with_rom() rebuilds the menu to the
+		// emulator variant (ROM Picker + LCD Mode + Scale).
+		rebuild_system_menu();
 
 		// Scan /Shared/Emulation/pm/games/ for *.min ROMs.
 		// 0 ROMs -> boot FreeBIOS only (its own no-cart splash).
