@@ -23,6 +23,7 @@
 #include <stdint.h>
 
 #include "PokeMini.h"
+#include "rom_picker.h"
 #include "Hardware.h"
 #include "MinxCPU.h"
 #include "MinxIO.h"
@@ -662,79 +663,20 @@ static void render_screen(void)
 
 // --- ROM picker -----------------------------------------------------------
 //
-// Lists *.min files in /Shared/Emulation/pm/games/ (CrankBoy convention) and
-// lets the user pick one with D-pad + A. If the directory is empty, falls
-// back to the bundled boot.min. Rough/testing UI, not final.
-
-#define MAX_ROMS 128
-// 128 covers full English titles and fan-translation names; ROMs that
-// exceeded the previous 64-byte cap were silently dropped from the picker.
-#define MAX_ROM_NAME 128
+// Delegates to pd-rom-picker (libs/pd-rom-picker), a shared library used
+// across all emulator ports. It scans ROM_DIR, filters by extension,
+// sorts alphabetically, and renders its own scrollable list UI.
 
 static const char *ROM_DIR = "/Shared/Emulation/pm/games/";
 
-static char rom_names[MAX_ROMS][MAX_ROM_NAME];
-static int rom_count = 0;
-static int rom_cursor = 0;
-static int rom_view_top = 0;
+static void start_emulation_with_rom(const char *path);
 
-static LCDFont *picker_font = NULL;
-
-static int has_min_suffix(const char *name)
+// Called by the library when the player presses A on a valid ROM entry.
+// path is the full absolute path (ROM_DIR + filename).
+static void rom_selected_cb(const char *path, void *userdata)
 {
-	size_t len = strlen(name);
-	if (len < 5) return 0;  // need at least "x.min"
-	const char *e = name + len - 4;
-	return e[0] == '.'
-	    && (e[1] == 'm' || e[1] == 'M')
-	    && (e[2] == 'i' || e[2] == 'I')
-	    && (e[3] == 'n' || e[3] == 'N');
-}
-
-static int rom_listfiles_seen = 0;
-
-static void rom_listfiles_cb(const char *filename, void *ctx)
-{
-	(void)ctx;
-	rom_listfiles_seen++;
-	size_t flen = strlen(filename);
-	pd->system->logToConsole("%s:   listfiles entry: '%s' (len=%u)",
-		AppName, filename, (unsigned)flen);
-	if (!has_min_suffix(filename)) {
-		// Log the trailing bytes so invisible chars (whitespace, BOM) show up
-		// as their numeric values rather than disappearing in the console.
-		const unsigned char *t = (const unsigned char *)filename;
-		size_t off = flen >= 6 ? flen - 6 : 0;
-		pd->system->logToConsole(
-			"%s:     dropped: suffix mismatch, last bytes: %02X %02X %02X %02X %02X %02X",
-			AppName,
-			t[off], t[off+1], t[off+2], t[off+3], t[off+4], t[off+5]);
-		return;
-	}
-	if (rom_count >= MAX_ROMS) {
-		pd->system->logToConsole("%s:     dropped: MAX_ROMS=%d reached",
-			AppName, MAX_ROMS);
-		return;
-	}
-	if (flen >= MAX_ROM_NAME) {
-		pd->system->logToConsole("%s:     dropped: name length %u >= MAX_ROM_NAME=%d",
-			AppName, (unsigned)flen, MAX_ROM_NAME);
-		return;
-	}
-	strcpy(rom_names[rom_count], filename);
-	rom_count++;
-}
-
-// pd->file->mkdir is non-recursive, so create each path segment explicitly.
-// Each call silently no-ops if the directory already exists.
-// /Shared/ paths are routed to the cross-app shared folder (SDK 2.4+); mkdir
-// works correctly with these paths as of SDK 2.4.1.
-static void ensure_rom_dir(void)
-{
-	pd->file->mkdir("/Shared");
-	pd->file->mkdir("/Shared/Emulation");
-	pd->file->mkdir("/Shared/Emulation/pm");
-	pd->file->mkdir("/Shared/Emulation/pm/games");
+	(void)userdata;
+	start_emulation_with_rom(path);
 }
 
 // --- EEPROM persistence via Playdate file API ---------------------------------
@@ -745,77 +687,6 @@ void ensure_eep_dir(void);
 void setup_eeprom_path(const char *rom_path);
 int  pd_load_eeprom(const char *filename);
 int  pd_save_eeprom(const char *filename);
-
-static void scan_rom_dir(void)
-{
-	rom_count = 0;
-	rom_cursor = 0;
-	rom_view_top = 0;
-	rom_listfiles_seen = 0;
-
-	ensure_rom_dir();
-
-	// Verify the directory we're about to scan actually exists. If stat
-	// returns an error or isdir==0 it usually means /Shared/ access didn't
-	// route as expected (older SDK firmware? sandbox quirk?).
-	FileStat st;
-	int sr = pd->file->stat(ROM_DIR, &st);
-	if (sr != 0) {
-		const char *err = pd->file->geterr();
-		pd->system->logToConsole("%s: stat(%s) failed (%d): %s",
-			AppName, ROM_DIR, sr, err ? err : "(no error)");
-	} else {
-		pd->system->logToConsole("%s: stat(%s) ok isdir=%d size=%u",
-			AppName, ROM_DIR, st.isdir, st.size);
-	}
-
-	int lr = pd->file->listfiles(ROM_DIR, rom_listfiles_cb, NULL, 0);
-	if (lr != 0) {
-		const char *err = pd->file->geterr();
-		pd->system->logToConsole("%s: listfiles(%s) returned %d: %s",
-			AppName, ROM_DIR, lr, err ? err : "(no error)");
-	}
-	pd->system->logToConsole("%s: scan: %d entr(y/ies) seen, %d kept as *.min",
-		AppName, rom_listfiles_seen, rom_count);
-}
-
-static void render_picker(void)
-{
-	pd->graphics->clear(kColorWhite);
-	if (picker_font) pd->graphics->setFont(picker_font);
-	pd->graphics->setDrawMode(kDrawModeCopy);
-
-	const char *title = "PokeMini  -  Select ROM";
-	pd->graphics->drawText(title, strlen(title), kASCIIEncoding, 16, 12);
-
-	const int row_h = 18;
-	const int list_y = 44;
-	const int max_visible = 9;
-
-	if (rom_cursor < rom_view_top) rom_view_top = rom_cursor;
-	if (rom_cursor >= rom_view_top + max_visible)
-		rom_view_top = rom_cursor - max_visible + 1;
-
-	for (int i = 0; i < max_visible && rom_view_top + i < rom_count; i++) {
-		int idx = rom_view_top + i;
-		int y = list_y + i * row_h;
-		const char *name = rom_names[idx];
-
-		if (idx == rom_cursor) {
-			pd->graphics->fillRect(8, y - 2, LCD_COLUMNS - 16, row_h, kColorBlack);
-			pd->graphics->setDrawMode(kDrawModeFillWhite);
-		} else {
-			pd->graphics->setDrawMode(kDrawModeCopy);
-		}
-		pd->graphics->drawText(name, strlen(name), kASCIIEncoding, 16, y);
-	}
-	pd->graphics->setDrawMode(kDrawModeCopy);
-
-	const char *hint = "Up/Down: select    A: play";
-	pd->graphics->drawText(hint, strlen(hint), kASCIIEncoding, 16, LCD_ROWS - 22);
-
-	pd->graphics->markUpdatedRows(0, LCD_ROWS - 1);
-}
 
 // Wire a freshly-loaded ROM into the emulator and switch into emulation mode.
 // path == NULL means "boot with FreeBIOS only, no cart" — used when
@@ -946,8 +817,6 @@ static void start_emulation_with_rom(const char *path)
 // the user re-launches, scan_rom_dir runs again from kEventInit.
 static void return_to_picker(void)
 {
-	rom_cursor = 0;
-	rom_view_top = 0;
 	app_mode = MODE_PICKER;
 	rebuild_system_menu();
 	stop_audio_source();
@@ -1051,29 +920,6 @@ static void menu_item_screen_scale_cb(void *userdata)
 	save_settings();
 }
 
-static void picker_update(void)
-{
-	PDButtons cur, pushed, released;
-	pd->system->getButtonState(&cur, &pushed, &released);
-	(void)cur; (void)released;
-
-	if (rom_count > 0) {
-		if (pushed & kButtonUp)
-			rom_cursor = (rom_cursor - 1 + rom_count) % rom_count;
-		if (pushed & kButtonDown)
-			rom_cursor = (rom_cursor + 1) % rom_count;
-
-		if (pushed & kButtonA) {
-			char path[MAX_ROM_NAME + 64];
-			snprintf(path, sizeof(path), "%s%s", ROM_DIR, rom_names[rom_cursor]);
-			start_emulation_with_rom(path);
-			return;
-		}
-	}
-
-	render_picker();
-}
-
 // Reads the .eep save file off flash and writes the PM RTC fields with the
 // Playdate's wall-clock time. Called once per ROM switch from the one-shot
 // update_first_after_rom() callback (see below) — never from update()'s hot
@@ -1107,7 +953,7 @@ static int update(void *userdata)
 	(void)userdata;
 
 	if (app_mode == MODE_PICKER) {
-		picker_update();
+		rom_picker_update();
 		return 1;
 	}
 
@@ -1398,16 +1244,6 @@ int eventHandler(PlaydateAPI *playdate, PDSystemEvent event, uint32_t arg)
 
 		UIMenu_Init();
 
-		// Load a font for the picker. If this fails the picker still runs
-		// but text won't render — fine for a fallback/diagnostic path.
-		const char *font_err = NULL;
-		picker_font = pd->graphics->loadFont(
-			"/System/Fonts/Asheville-Sans-14-Light.pft", &font_err);
-		if (!picker_font) {
-			pd->system->logToConsole("%s: font load failed: %s",
-				AppName, font_err ? font_err : "(null)");
-		}
-
 		// The audio source is started when a ROM starts, not while the picker
 		// is up. Creating it at the emulation transition avoids occasional
 		// silent-source behavior observed on device after layout-only rebuilds.
@@ -1418,28 +1254,27 @@ int eventHandler(PlaydateAPI *playdate, PDSystemEvent event, uint32_t arg)
 		// emulator variant (ROM Picker + LCD Mode + Scale).
 		rebuild_system_menu();
 
-		// Scan /Shared/Emulation/pm/games/ for *.min ROMs.
-		// 0 ROMs -> boot FreeBIOS only (its own no-cart splash).
-		// 1 ROM  -> auto-load it; no point showing a one-item picker.
-		// 2+     -> show the picker.
-		scan_rom_dir();
-		pd->system->logToConsole("%s: %d ROM(s) in %s",
-			AppName, rom_count, ROM_DIR);
+		// Initialise the shared ROM picker library. It scans ROM_DIR, filters
+		// by extension, sorts, and draws its own UI. on_select fires when the
+		// player presses A on a valid file (or immediately if only one ROM
+		// exists and auto_load_single is set). The library creates ROM_DIR
+		// (and all parent segments) if it doesn't exist.
+		static const char *picker_exts[] = { "min", NULL };
+		RomPickerConfig picker_cfg = {
+			.folder           = ROM_DIR,
+			.extensions       = picker_exts,
+			.on_select        = rom_selected_cb,
+			.userdata         = NULL,
+			.auto_load_single = 1,
+		};
+		rom_picker_init(pd, &picker_cfg);
 
-		if (rom_count == 0) {
-			start_emulation_with_rom(NULL);
-		} else if (rom_count == 1) {
-			char path[MAX_ROM_NAME + 64];
-			snprintf(path, sizeof(path), "%s%s", ROM_DIR, rom_names[0]);
-			start_emulation_with_rom(path);
-		} else {
-			app_mode = MODE_PICKER;
+		app_mode = MODE_PICKER;
 #if POKEMINI_PM_RAM_DTCM
-			pd->system->setUpdateCallback(update_userstack_wrapper, pd);
+		pd->system->setUpdateCallback(update_userstack_wrapper, pd);
 #else
-			pd->system->setUpdateCallback(update, pd);
+		pd->system->setUpdateCallback(update, pd);
 #endif
-		}
 
 	} else if (event == kEventPause) {
 		emu_paused = 1;

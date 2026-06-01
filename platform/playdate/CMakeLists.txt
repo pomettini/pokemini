@@ -51,6 +51,7 @@ option(POKEMINI_ITCM_CALLBACKS "Per-frame copy hot memory callbacks to stack DTC
 
 set(GAME_SOURCES
     PokeMini_Playdate.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/libs/pd-rom-picker/src/rom_picker.c
     ${POKEMINI_ROOT}/freebios/freebios.c
     ${POKEMINI_ROOT}/source/PMCommon.c
     ${POKEMINI_ROOT}/source/PokeMini.c
@@ -100,6 +101,7 @@ target_include_directories(${TARGET_NAME} PRIVATE
     ${POKEMINI_ROOT}/source
     ${POKEMINI_ROOT}/resource
     ${POKEMINI_ROOT}/freebios
+    ${CMAKE_CURRENT_SOURCE_DIR}/libs/pd-rom-picker/src
 )
 
 target_compile_definitions(${TARGET_NAME} PRIVATE
