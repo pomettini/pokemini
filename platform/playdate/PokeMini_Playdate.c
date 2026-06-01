@@ -18,23 +18,25 @@
 
 #include "pd_api.h"
 
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdint.h>
 
-#include "PokeMini.h"
-#include "rom_picker.h"
 #include "Hardware.h"
+#include "Joystick.h"
 #include "MinxCPU.h"
 #include "MinxIO.h"
-#include "Joystick.h"
-#include "Video_x1.h"
+#include "PokeMini.h"
 #include "UI.h"
+#include "Video_x1.h"
+#include "rom_picker.h"
 
 #include "PokeMini_DTCM.h"
 #include "PokeMini_UserStack.h"
 
-PlaydateAPI *pd;  // non-static: shared with PokeMini_Playdate_EEPROM.c
+PlaydateAPI *pd; // non-static: shared with PokeMini_Playdate_EEPROM.c
+
+// --- Diagnostics --------------------------------------------------------
 
 #ifdef PD_PERF_DIAG
 unsigned int PDPerf_CpuUs = 0;
@@ -51,37 +53,34 @@ static unsigned int pdperf_update_us = 0;
 static unsigned int pdperf_updates = 0;
 static unsigned int pdperf_pm_frames = 0;
 
-unsigned int PDPerf_NowUs(void)
-{
-	return (unsigned int)(pd->system->getElapsedTime() * 1000000.0f);
+unsigned int PDPerf_NowUs(void) {
+  return (unsigned int)(pd->system->getElapsedTime() * 1000000.0f);
 }
 
-static void pdperf_log_and_reset(void)
-{
-	unsigned int accounted =
-		pdperf_emu_us + pdperf_input_us + pdperf_render_us;
-	unsigned int misc = (pdperf_update_us > accounted)
-		? pdperf_update_us - accounted : 0;
+static void pdperf_log_and_reset(void) {
+  unsigned int accounted = pdperf_emu_us + pdperf_input_us + pdperf_render_us;
+  unsigned int misc =
+      (pdperf_update_us > accounted) ? pdperf_update_us - accounted : 0;
 
-	pd->system->logToConsole(
-		"diag: upd=%u pm=%u total=%uus emu=%u cpu=%u ce=%u cf=%u tim=%u prc=%u aud=%u input=%u render=%u misc=%u",
-		pdperf_updates, pdperf_pm_frames, pdperf_update_us,
-		pdperf_emu_us, PDPerf_CpuUs, PDPerf_CeUs, PDPerf_CfUs,
-		PDPerf_TimersUs, PDPerf_PrcUs, PDPerf_AudioUs,
-		pdperf_input_us, pdperf_render_us, misc);
+  pd->system->logToConsole(
+      "diag: upd=%u pm=%u total=%uus emu=%u cpu=%u ce=%u cf=%u tim=%u prc=%u "
+      "aud=%u input=%u render=%u misc=%u",
+      pdperf_updates, pdperf_pm_frames, pdperf_update_us, pdperf_emu_us,
+      PDPerf_CpuUs, PDPerf_CeUs, PDPerf_CfUs, PDPerf_TimersUs, PDPerf_PrcUs,
+      PDPerf_AudioUs, pdperf_input_us, pdperf_render_us, misc);
 
-	PDPerf_CpuUs = 0;
-	PDPerf_CeUs = 0;
-	PDPerf_CfUs = 0;
-	PDPerf_TimersUs = 0;
-	PDPerf_PrcUs = 0;
-	PDPerf_AudioUs = 0;
-	pdperf_emu_us = 0;
-	pdperf_input_us = 0;
-	pdperf_render_us = 0;
-	pdperf_update_us = 0;
-	pdperf_updates = 0;
-	pdperf_pm_frames = 0;
+  PDPerf_CpuUs = 0;
+  PDPerf_CeUs = 0;
+  PDPerf_CfUs = 0;
+  PDPerf_TimersUs = 0;
+  PDPerf_PrcUs = 0;
+  PDPerf_AudioUs = 0;
+  pdperf_emu_us = 0;
+  pdperf_input_us = 0;
+  pdperf_render_us = 0;
+  pdperf_update_us = 0;
+  pdperf_updates = 0;
+  pdperf_pm_frames = 0;
 }
 #endif
 
@@ -90,423 +89,363 @@ static void pdperf_log_and_reset(void)
 #define PD_OPDIAG_LOG_UPDATES 150
 
 static const char *const pdopdiag_names[MINXCPU_OPDIAG_TABLES] = {
-	"xx", "ce", "cf", "spce", "spcf"
-};
+    "xx", "ce", "cf", "spce", "spcf"};
 
-static void pdopdiag_log_table(int table)
-{
-	uint32_t total = 0;
-	uint32_t top_counts[PD_OPDIAG_TOP_N] = {0};
-	uint8_t top_opcodes[PD_OPDIAG_TOP_N] = {0};
+static void pdopdiag_log_table(int table) {
+  uint32_t total = 0;
+  uint32_t top_counts[PD_OPDIAG_TOP_N] = {0};
+  uint8_t top_opcodes[PD_OPDIAG_TOP_N] = {0};
 
-	for (int opcode = 0; opcode < 256; opcode++) {
-		uint32_t count = MinxCPU_OpcodeDiag[table][opcode];
-		total += count;
-		if (count == 0 || count <= top_counts[PD_OPDIAG_TOP_N - 1])
-			continue;
+  for (int opcode = 0; opcode < 256; opcode++) {
+    uint32_t count = MinxCPU_OpcodeDiag[table][opcode];
+    total += count;
+    if (count == 0 || count <= top_counts[PD_OPDIAG_TOP_N - 1])
+      continue;
 
-		for (int slot = 0; slot < PD_OPDIAG_TOP_N; slot++) {
-			if (count > top_counts[slot]) {
-				for (int move = PD_OPDIAG_TOP_N - 1; move > slot; move--) {
-					top_counts[move] = top_counts[move - 1];
-					top_opcodes[move] = top_opcodes[move - 1];
-				}
-				top_counts[slot] = count;
-				top_opcodes[slot] = (uint8_t)opcode;
-				break;
-			}
-		}
-	}
+    for (int slot = 0; slot < PD_OPDIAG_TOP_N; slot++) {
+      if (count > top_counts[slot]) {
+        for (int move = PD_OPDIAG_TOP_N - 1; move > slot; move--) {
+          top_counts[move] = top_counts[move - 1];
+          top_opcodes[move] = top_opcodes[move - 1];
+        }
+        top_counts[slot] = count;
+        top_opcodes[slot] = (uint8_t)opcode;
+        break;
+      }
+    }
+  }
 
-	if (total == 0)
-		return;
+  if (total == 0)
+    return;
 
-	pd->system->logToConsole(
-		"opdiag: %s total=%lu top=%02X:%lu %02X:%lu %02X:%lu %02X:%lu %02X:%lu %02X:%lu %02X:%lu %02X:%lu",
-		pdopdiag_names[table], (unsigned long)total,
-		top_opcodes[0], (unsigned long)top_counts[0],
-		top_opcodes[1], (unsigned long)top_counts[1],
-		top_opcodes[2], (unsigned long)top_counts[2],
-		top_opcodes[3], (unsigned long)top_counts[3],
-		top_opcodes[4], (unsigned long)top_counts[4],
-		top_opcodes[5], (unsigned long)top_counts[5],
-		top_opcodes[6], (unsigned long)top_counts[6],
-		top_opcodes[7], (unsigned long)top_counts[7]);
+  pd->system->logToConsole(
+      "opdiag: %s total=%lu top=%02X:%lu %02X:%lu %02X:%lu %02X:%lu %02X:%lu "
+      "%02X:%lu %02X:%lu %02X:%lu",
+      pdopdiag_names[table], (unsigned long)total, top_opcodes[0],
+      (unsigned long)top_counts[0], top_opcodes[1],
+      (unsigned long)top_counts[1], top_opcodes[2],
+      (unsigned long)top_counts[2], top_opcodes[3],
+      (unsigned long)top_counts[3], top_opcodes[4],
+      (unsigned long)top_counts[4], top_opcodes[5],
+      (unsigned long)top_counts[5], top_opcodes[6],
+      (unsigned long)top_counts[6], top_opcodes[7],
+      (unsigned long)top_counts[7]);
 }
 
-static void pdopdiag_log_and_reset(unsigned int updates)
-{
-	pd->system->logToConsole("opdiag: window=%u updates", updates);
-	for (int table = 0; table < MINXCPU_OPDIAG_TABLES; table++)
-		pdopdiag_log_table(table);
-	MinxCPU_OpcodeDiagReset();
+static void pdopdiag_log_and_reset(unsigned int updates) {
+  pd->system->logToConsole("opdiag: window=%u updates", updates);
+  for (int table = 0; table < MINXCPU_OPDIAG_TABLES; table++)
+    pdopdiag_log_table(table);
+  MinxCPU_OpcodeDiagReset();
 }
 #endif
 
+// --- Platform menu stub (required by UI.c) ------------------------------
+
 const char *AppName = "PokeMini " PokeMini_Version " Playdate";
 
-// Platform menu (required by UI.c)
 int UIItems_PlatformC(int index, int reason);
-TUIMenu_Item UIItems_Platform[] = {
-	PLATFORMDEF_GOBACK,
-	PLATFORMDEF_SAVEOPTIONS,
-	PLATFORMDEF_END(UIItems_PlatformC)
-};
-int UIItems_PlatformC(int index, int reason)
-{
-	if (reason == UIMENU_CANCEL) UIMenu_PrevMenu();
-	return 1;
+TUIMenu_Item UIItems_Platform[] = {PLATFORMDEF_GOBACK, PLATFORMDEF_SAVEOPTIONS,
+                                   PLATFORMDEF_END(UIItems_PlatformC)};
+int UIItems_PlatformC(int index, int reason) {
+  if (reason == UIMENU_CANCEL)
+    UIMenu_PrevMenu();
+  return 1;
 }
+
+// --- Constants ----------------------------------------------------------
 
 // Playdate: 400x240 1-bit monochrome display
 // Pokemon Mini native screen: 96x64 pixels
-#define PM_W     96
-#define PM_H     64
+#define PM_W 96
+#define PM_H 64
 
-#define SCALE_3X_W  (PM_W * 3)
-#define SCALE_3X_H  (PM_H * 3)
-#define SCALE_3X_X  ((LCD_COLUMNS - SCALE_3X_W) / 2)  // 56
-#define SCALE_3X_Y  ((LCD_ROWS    - SCALE_3X_H) / 2)  // 24
+#define SCALE_3X_W (PM_W * 3)
+#define SCALE_3X_H (PM_H * 3)
+#define SCALE_3X_X ((LCD_COLUMNS - SCALE_3X_W) / 2) // 56
+#define SCALE_3X_Y ((LCD_ROWS - SCALE_3X_H) / 2)    // 24
 
 // 3.75x fills the screen vertically (64*3.75 = 240 = LCD_ROWS). Width is
 // 96*3.75 = 360 = 45 bytes, byte-aligned. True-center X would be 20 px,
 // which is not byte-aligned; we use 16 (4 px left of center) so each dst
 // row is a direct memcpy of 45 bytes.
-#define SCALE_375X_W  360
-#define SCALE_375X_H  240
-#define SCALE_375X_X  16
-#define SCALE_375X_Y  0
+#define SCALE_375X_W 360
+#define SCALE_375X_H 240
+#define SCALE_375X_X 16
+#define SCALE_375X_Y 0
 
 enum {
-	RENDER_SCALE_3X,
-	RENDER_SCALE_375X,
+  RENDER_SCALE_3X,
+  RENDER_SCALE_375X,
 };
 
-// ROM buffer allocated via Playdate file API (fopen is unsupported on device)
-static uint8_t *rom_buf = NULL;
-
-// App mode is declared here (rather than down by the picker code) because the
-// audio_callback below reads it across threads to silence output while the
-// picker is up. volatile so the audio thread sees writes from the main thread.
-typedef enum { MODE_PICKER, MODE_EMULATOR } AppMode;
-static volatile AppMode app_mode = MODE_PICKER;
-
-// Set on kEventPause (system menu opens), cleared on kEventResume. The audio
-// thread checks this to silence output during the system menu. volatile for
-// the same reason as app_mode — written on the main thread, read on audio.
-static volatile int emu_paused = 0;
-
-// Audio source handle
-static SoundSource *audio_source = NULL;
-
-static int audio_callback(void *context, int16_t *left, int16_t *right, int len);
-static int update(void *userdata);
-static int update_first_after_rom(void *userdata);
-
-#if POKEMINI_PM_RAM_DTCM
-// User-stack wrappers. The Playdate firmware-provided stack lives in DTCM
-// (top portion). If we put PM_RAM at the bottom of DTCM, the firmware
-// stack and PM_RAM can collide when our call chain grows. CrankBoy solves
-// this by switching to a separate user_stack[16 KB] in SDRAM before
-// running emulation. We do the same here: register these wrappers as the
-// Playdate update callback; they switch SP to user_stack and call the
-// real update via call_with_user_stack_1.
-static int update_userstack_wrapper(void *userdata);
-static int update_first_after_rom_userstack_wrapper(void *userdata);
-#endif
-
-static void stop_audio_source(void)
-{
-	if (audio_source) {
-		pd->sound->removeSource(audio_source);
-		audio_source = NULL;
-	}
-}
-
-static void start_audio_source(void)
-{
-	stop_audio_source();
-	pd->sound->setOutputsActive(1, 1);
-
-	audio_source = pd->sound->addSource(audio_callback, NULL, 1);
-	if (audio_source) {
-		pd->sound->source->setVolume(audio_source, 1.0f, 1.0f);
-		pd->sound->setOutputsActive(1, 1);
-		pd->system->logToConsole("%s: audio source started", AppName);
-	} else {
-		pd->system->logToConsole("%s: audio source creation failed", AppName);
-	}
-}
-
-// System menu item for LCD quality/performance switching.
-static PDMenuItem *lcd_mode_menu_item = NULL;
-static const char *lcd_mode_options[] = { "Soft", "Fast" };
-static PDMenuItem *screen_scale_menu_item = NULL;
-static const char *screen_scale_options[] = { "3x", "3.75x" };
-static int screen_scale_mode = RENDER_SCALE_375X;
-static PDMenuItem *fps_menu_item = NULL;
-static int fps_visible = 0;
-
-// C is held while the crank sits in this undocked angle zone. This avoids
-// using the dock/undock mechanism itself as a gameplay button.
+// C is held while the crank sits in this undocked angle zone.
 #define C_CRANK_ANGLE_MIN 60.0f
 #define C_CRANK_ANGLE_MAX 180.0f
 
-// Playdate physical button names used by the joystick subsystem
 static char *PD_KeysNames[] = {
-	"Off",    // -1
-	"A",      //  0
-	"B",      //  1
-	"Up",     //  2
-	"Down",   //  3
-	"Left",   //  4
-	"Right",  //  5
-	"Accel",  //  6 — accelerometer-driven shake
+    "Off",   // -1
+    "A",     //  0
+    "B",     //  1
+    "Up",    //  2
+    "Down",  //  3
+    "Left",  //  4
+    "Right", //  5
+    "Accel", //  6 — accelerometer-driven shake
 };
 
 // PM key order: Menu, A, B, C, Up, Down, Left, Right, Power, Shake
 static int PD_KeysMapping[] = {
-	-1,  // Menu  -> unmapped (handled by system menu)
-	 0,  // A     -> button A
-	 1,  // B     -> button B
-	-1,  // C     -> direct crank angle hold in handle_input()
-	 2,  // Up    -> D-pad Up
-	 3,  // Down  -> D-pad Down
-	 4,  // Left  -> D-pad Left
-	 5,  // Right -> D-pad Right
-	-1,  // Power -> unmapped
-	 6,  // Shake -> accelerometer (squared-magnitude threshold)
+    -1, // Menu  -> unmapped (handled by system menu)
+    0,  // A     -> button A
+    1,  // B     -> button B
+    -1, // C     -> direct crank angle hold in handle_input()
+    2,  // Up    -> D-pad Up
+    3,  // Down  -> D-pad Down
+    4,  // Left  -> D-pad Left
+    5,  // Right -> D-pad Right
+    -1, // Power -> unmapped
+    6,  // Shake -> accelerometer (squared-magnitude threshold)
 };
 
-// Playdate audio callback: fill the left channel with generated PM audio samples.
-// MinxAudio_GenerateEmulatedS16 reads only a few emulator state variables and is
-// safe to call from the audio thread when using POKEMINI_GENSOUND.
-//
-// We gate on app_mode: when the picker is up the emulator isn't being stepped,
-// but MinxAudio.Volume and the Tmr3 register state still hold whatever the
-// game last set them to — so without this gate the audio thread would keep
-// emitting the last tone indefinitely after returning to the picker.
-static int audio_callback(void *context, int16_t *left, int16_t *right, int len)
-{
-	(void)context;
-	if (len <= 0) return 0;
+// --- State --------------------------------------------------------------
 
-	if (app_mode != MODE_EMULATOR || emu_paused) {
-		memset(left, 0, (size_t)len * sizeof(*left));
-		if (right) memset(right, 0, (size_t)len * sizeof(*right));
-		return 1;
-	}
+// ROM buffer allocated via Playdate file API (fopen is unsupported on device)
+static uint8_t *rom_buf = NULL;
 
-	MinxAudio_GenerateEmulatedS16(left, len, 1);
-	if (right) memcpy(right, left, (size_t)len * sizeof(*left));
-	return 1;
+// app_mode is volatile: the audio callback reads it across threads to silence
+// output while the picker is up. emu_paused is set on kEventPause so the
+// audio thread can silence output while the system menu is open.
+typedef enum { MODE_PICKER, MODE_EMULATOR } AppMode;
+static volatile AppMode app_mode = MODE_PICKER;
+static volatile int emu_paused = 0;
+
+static SoundSource *audio_source = NULL;
+
+static PDMenuItem *lcd_mode_menu_item = NULL;
+static const char *lcd_mode_options[] = {"Soft", "Fast"};
+static PDMenuItem *screen_scale_menu_item = NULL;
+static const char *screen_scale_options[] = {"3x", "3.75x"};
+static int screen_scale_mode = RENDER_SCALE_375X;
+static PDMenuItem *fps_menu_item = NULL;
+static int fps_visible = 0;
+
+// --- Forward declarations -----------------------------------------------
+
+static void start_emulation_with_rom(const char *path);
+static void return_to_picker(void);
+static int update(void *userdata);
+static int update_first_after_rom(void *userdata);
+#if POKEMINI_PM_RAM_DTCM
+static int update_userstack_wrapper(void *userdata);
+static int update_first_after_rom_userstack_wrapper(void *userdata);
+#endif
+
+// --- Audio --------------------------------------------------------------
+
+// Gate on app_mode: when the picker is up the emulator isn't being stepped,
+// but MinxAudio state still holds whatever the game last set — so without
+// this gate the audio thread would keep emitting the last tone indefinitely.
+static int audio_callback(void *context, int16_t *left, int16_t *right,
+                          int len) {
+  (void)context;
+  if (len <= 0)
+    return 0;
+
+  if (app_mode != MODE_EMULATOR || emu_paused) {
+    memset(left, 0, (size_t)len * sizeof(*left));
+    if (right)
+      memset(right, 0, (size_t)len * sizeof(*right));
+    return 1;
+  }
+
+  MinxAudio_GenerateEmulatedS16(left, len, 1);
+  if (right)
+    memcpy(right, left, (size_t)len * sizeof(*left));
+  return 1;
 }
 
-// Load a .min ROM from the Playdate filesystem into a heap buffer, then hand
-// the buffer to the emulator via PokeMini_SetMINMem.  We use pd->file->* here
-// because the standard fopen() is not available on Playdate hardware.
-//
-// kFileRead | kFileReadData: search the data side (which covers the cross-app
-// /Shared/ folder added in SDK 2.4) AND the bundle. With kFileRead alone the
-// API only searches the read-only pdx bundle, which silently misses every
-// ROM the user dropped into /Shared/Emulation/pm/games/.
-static int load_rom(const char *path)
-{
-	SDFile *f = pd->file->open(path, kFileRead | kFileReadData);
-	if (!f) {
-		const char *err = pd->file->geterr();
-		pd->system->logToConsole("%s: file->open(%s) failed: %s",
-			AppName, path, err ? err : "(no error)");
-		return 0;
-	}
-
-	pd->file->seek(f, 0, SEEK_END);
-	int size = pd->file->tell(f);
-	pd->file->seek(f, 0, SEEK_SET);
-
-	if (size <= 0) {
-		pd->file->close(f);
-		return 0;
-	}
-
-	// Free the previous ROM's buffer before allocating a new one — picking a
-	// second ROM without this leaks the first.
-	if (rom_buf) {
-		free(rom_buf);
-		rom_buf = NULL;
-	}
-
-	rom_buf = (uint8_t *)malloc((size_t)size);
-	if (!rom_buf) {
-		pd->file->close(f);
-		return 0;
-	}
-
-	pd->file->read(f, rom_buf, (unsigned int)size);
-	pd->file->close(f);
-
-	return PokeMini_SetMINMem(rom_buf, size);
+static void stop_audio_source(void) {
+  if (audio_source) {
+    pd->sound->removeSource(audio_source);
+    audio_source = NULL;
+  }
 }
 
-// Poll all Playdate buttons and forward press/release events to the joystick
-// subsystem, which maps them to Pokemon Mini keys via PD_KeysMapping.
-// A vigorous device shake (accelerometer magnitude past a threshold) emits a
-// PM "Shake" pulse — a more natural fit than the crank ever was.
-static void handle_input(void)
-{
-	PDButtons cur, pushed, released;
-	pd->system->getButtonState(&cur, &pushed, &released);
+static void start_audio_source(void) {
+  stop_audio_source();
+  pd->sound->setOutputsActive(1, 1);
 
-	if (pushed   & kButtonA)     JoystickButtonsEvent(0, 1);
-	if (released & kButtonA)     JoystickButtonsEvent(0, 0);
-	if (pushed   & kButtonB)     JoystickButtonsEvent(1, 1);
-	if (released & kButtonB)     JoystickButtonsEvent(1, 0);
-
-	static int c_crank_pressed = 0;
-	int c_crank_now = 0;
-	if (!pd->system->isCrankDocked()) {
-		float crank_angle = pd->system->getCrankAngle();
-		c_crank_now = (crank_angle >= C_CRANK_ANGLE_MIN &&
-		               crank_angle <= C_CRANK_ANGLE_MAX);
-	}
-	if (c_crank_now != c_crank_pressed) {
-		UIMenu_KeyEvent(MINX_KEY_C, c_crank_now);
-		c_crank_pressed = c_crank_now;
-	}
-
-	if (pushed   & kButtonUp)    JoystickButtonsEvent(2, 1);
-	if (released & kButtonUp)    JoystickButtonsEvent(2, 0);
-	if (pushed   & kButtonDown)  JoystickButtonsEvent(3, 1);
-	if (released & kButtonDown)  JoystickButtonsEvent(3, 0);
-	if (pushed   & kButtonLeft)  JoystickButtonsEvent(4, 1);
-	if (released & kButtonLeft)  JoystickButtonsEvent(4, 0);
-	if (pushed   & kButtonRight) JoystickButtonsEvent(5, 1);
-	if (released & kButtonRight) JoystickButtonsEvent(5, 0);
-
-	// Shake input via the accelerometer. Hardware samples at ~50 Hz and on
-	// device getAccelerometer appears to do real I²C work, so polling every
-	// 30 Hz update is wasted bandwidth — throttle to every 3rd frame
-	// (10 Hz). Human shake gestures top out around 5 Hz; this is plenty.
-	// At rest |g|² ≈ 1.0; a confident shake pushes it well past that.
-	// Cooldown prevents one gesture from firing multiple PM Shake events.
-	static int shake_cooldown = 0;
-	static int shake_poll_phase = 0;
-	if (shake_cooldown > 0) shake_cooldown--;
-	if (++shake_poll_phase >= 3) {
-		shake_poll_phase = 0;
-		float ax, ay, az;
-		pd->system->getAccelerometer(&ax, &ay, &az);
-		float mag2 = ax * ax + ay * ay + az * az;
-		if (mag2 > 2.5f && shake_cooldown == 0) {
-			JoystickButtonsEvent(6, 1);
-			JoystickButtonsEvent(6, 0);
-			shake_cooldown = 2;  // ~200 ms when polling every 3rd frame
-		}
-	}
+  audio_source = pd->sound->addSource(audio_callback, NULL, 1);
+  if (audio_source) {
+    pd->sound->source->setVolume(audio_source, 1.0f, 1.0f);
+    pd->sound->setOutputsActive(1, 1);
+    pd->system->logToConsole("%s: audio source started", AppName);
+  } else {
+    pd->system->logToConsole("%s: audio source creation failed", AppName);
+  }
 }
+
+// --- Input --------------------------------------------------------------
+
+static void handle_input(void) {
+  PDButtons cur, pushed, released;
+  pd->system->getButtonState(&cur, &pushed, &released);
+
+  if (pushed & kButtonA)
+    JoystickButtonsEvent(0, 1);
+  if (released & kButtonA)
+    JoystickButtonsEvent(0, 0);
+  if (pushed & kButtonB)
+    JoystickButtonsEvent(1, 1);
+  if (released & kButtonB)
+    JoystickButtonsEvent(1, 0);
+
+  static int c_crank_pressed = 0;
+  int c_crank_now = 0;
+  if (!pd->system->isCrankDocked()) {
+    float crank_angle = pd->system->getCrankAngle();
+    c_crank_now =
+        (crank_angle >= C_CRANK_ANGLE_MIN && crank_angle <= C_CRANK_ANGLE_MAX);
+  }
+  if (c_crank_now != c_crank_pressed) {
+    UIMenu_KeyEvent(MINX_KEY_C, c_crank_now);
+    c_crank_pressed = c_crank_now;
+  }
+
+  if (pushed & kButtonUp)
+    JoystickButtonsEvent(2, 1);
+  if (released & kButtonUp)
+    JoystickButtonsEvent(2, 0);
+  if (pushed & kButtonDown)
+    JoystickButtonsEvent(3, 1);
+  if (released & kButtonDown)
+    JoystickButtonsEvent(3, 0);
+  if (pushed & kButtonLeft)
+    JoystickButtonsEvent(4, 1);
+  if (released & kButtonLeft)
+    JoystickButtonsEvent(4, 0);
+  if (pushed & kButtonRight)
+    JoystickButtonsEvent(5, 1);
+  if (released & kButtonRight)
+    JoystickButtonsEvent(5, 0);
+
+  // Shake input via the accelerometer. Throttled to every 3rd frame (10 Hz)
+  // because getAccelerometer does real I²C work on device. Human shakes top
+  // out around 5 Hz so 10 Hz is plenty. At rest |g|² ≈ 1.0; a confident
+  // shake pushes it well past that. Cooldown prevents one gesture from
+  // firing multiple PM Shake events.
+  static int shake_cooldown = 0;
+  static int shake_poll_phase = 0;
+  if (shake_cooldown > 0)
+    shake_cooldown--;
+  if (++shake_poll_phase >= 3) {
+    shake_poll_phase = 0;
+    float ax, ay, az;
+    pd->system->getAccelerometer(&ax, &ay, &az);
+    float mag2 = ax * ax + ay * ay + az * az;
+    if (mag2 > 2.5f && shake_cooldown == 0) {
+      JoystickButtonsEvent(6, 1);
+      JoystickButtonsEvent(6, 0);
+      shake_cooldown = 2; // ~200 ms when polling every 3rd frame
+    }
+  }
+}
+
+// --- Pixel expansion LUTs -----------------------------------------------
 
 // 8 PM pixels (1 bit each, MSB = leftmost) expand to 24 Playdate
-// framebuffer bits. Precomputed once at startup so each PM byte becomes
-// direct byte stores instead of per-pixel read-modify-writes.
+// framebuffer bits. Precomputed once at startup.
 static uint8_t expand_lut_3x[256][3];
 
-// Same idea for the 3.75x scale. One PM byte (8 src bits) expands to 30
-// dst bits using a 4,4,4,3,4,4,4,3 width pattern per src bit (per 4 src
-// bits: widths 4+4+4+3 = 15 dst bits; per byte: 30 dst bits). Packed in
-// the low 30 bits of a uint32_t. ~1 KB rodata.
+// One PM byte (8 src bits) expands to 30 dst bits using a 4,4,4,3,4,4,4,3
+// width pattern per src bit. Packed in the low 30 bits of a uint32_t. ~1 KB.
 static uint32_t expand_lut_375x[256];
 
-static void init_expand_lut(void)
-{
-	for (int i = 0; i < 256; i++) {
-		uint32_t bits3 = 0;
-		uint32_t bits375 = 0;
-		for (int b = 0; b < 8; b++) {
-			int width = ((b & 3) == 3) ? 3 : 4;
-			bits375 <<= width;
-			if ((i >> (7 - b)) & 1) {
-				// MSB-first to match Playdate framebuffer layout.
-				bits3 |= (uint32_t)0x7 << (24 - 3 - b * 3);
-				bits375 |= (uint32_t)((1u << width) - 1u);
-			}
-		}
-		expand_lut_3x[i][0] = (uint8_t)(bits3 >> 16);
-		expand_lut_3x[i][1] = (uint8_t)(bits3 >> 8);
-		expand_lut_3x[i][2] = (uint8_t)(bits3);
-		expand_lut_375x[i] = bits375;
-	}
+static void init_expand_lut(void) {
+  for (int i = 0; i < 256; i++) {
+    uint32_t bits3 = 0;
+    uint32_t bits375 = 0;
+    for (int b = 0; b < 8; b++) {
+      int width = ((b & 3) == 3) ? 3 : 4;
+      bits375 <<= width;
+      if ((i >> (7 - b)) & 1) {
+        // MSB-first to match Playdate framebuffer layout.
+        bits3 |= (uint32_t)0x7 << (24 - 3 - b * 3);
+        bits375 |= (uint32_t)((1u << width) - 1u);
+      }
+    }
+    expand_lut_3x[i][0] = (uint8_t)(bits3 >> 16);
+    expand_lut_3x[i][1] = (uint8_t)(bits3 >> 8);
+    expand_lut_3x[i][2] = (uint8_t)(bits3);
+    expand_lut_375x[i] = bits375;
+  }
 }
 
 static void expand_quad_375x(uint8_t b0, uint8_t b1, uint8_t b2, uint8_t b3,
-                             uint8_t *dst)
-{
-	// 4 src bytes (32 bits) -> 120 dst bits = 15 dst bytes, byte-aligned.
-	// Each src byte contributes 30 bits in the low part of its uint32_t.
-	// Combined 120-bit output, MSB-first:
-	//   bits 119..90 from e0, 89..60 from e1, 59..30 from e2, 29..0 from e3.
-	uint32_t e0 = expand_lut_375x[b0];
-	uint32_t e1 = expand_lut_375x[b1];
-	uint32_t e2 = expand_lut_375x[b2];
-	uint32_t e3 = expand_lut_375x[b3];
+                             uint8_t *dst) {
+  // 4 src bytes (32 bits) -> 120 dst bits = 15 dst bytes, byte-aligned.
+  // Each src byte contributes 30 bits in the low part of its uint32_t.
+  // Combined 120-bit output, MSB-first:
+  //   bits 119..90 from e0, 89..60 from e1, 59..30 from e2, 29..0 from e3.
+  uint32_t e0 = expand_lut_375x[b0];
+  uint32_t e1 = expand_lut_375x[b1];
+  uint32_t e2 = expand_lut_375x[b2];
+  uint32_t e3 = expand_lut_375x[b3];
 
-	dst[ 0] = (uint8_t)(e0 >> 22);
-	dst[ 1] = (uint8_t)(e0 >> 14);
-	dst[ 2] = (uint8_t)(e0 >>  6);
-	dst[ 3] = (uint8_t)((e0 << 2) | (e1 >> 28));
-	dst[ 4] = (uint8_t)(e1 >> 20);
-	dst[ 5] = (uint8_t)(e1 >> 12);
-	dst[ 6] = (uint8_t)(e1 >>  4);
-	dst[ 7] = (uint8_t)((e1 << 4) | (e2 >> 26));
-	dst[ 8] = (uint8_t)(e2 >> 18);
-	dst[ 9] = (uint8_t)(e2 >> 10);
-	dst[10] = (uint8_t)(e2 >>  2);
-	dst[11] = (uint8_t)((e2 << 6) | (e3 >> 24));
-	dst[12] = (uint8_t)(e3 >> 16);
-	dst[13] = (uint8_t)(e3 >>  8);
-	dst[14] = (uint8_t)(e3);
+  dst[0] = (uint8_t)(e0 >> 22);
+  dst[1] = (uint8_t)(e0 >> 14);
+  dst[2] = (uint8_t)(e0 >> 6);
+  dst[3] = (uint8_t)((e0 << 2) | (e1 >> 28));
+  dst[4] = (uint8_t)(e1 >> 20);
+  dst[5] = (uint8_t)(e1 >> 12);
+  dst[6] = (uint8_t)(e1 >> 4);
+  dst[7] = (uint8_t)((e1 << 4) | (e2 >> 26));
+  dst[8] = (uint8_t)(e2 >> 18);
+  dst[9] = (uint8_t)(e2 >> 10);
+  dst[10] = (uint8_t)(e2 >> 2);
+  dst[11] = (uint8_t)((e2 << 6) | (e3 >> 24));
+  dst[12] = (uint8_t)(e3 >> 16);
+  dst[13] = (uint8_t)(e3 >> 8);
+  dst[14] = (uint8_t)(e3);
 }
 
+// --- Rendering ----------------------------------------------------------
+
 // Threshold lookups for the analog render path. MinxLCD_DecayRefresh keeps
-// a 4-bit on/off history per pixel in LCDPixelsAS; the original pipeline
-// then materialized a smoothed brightness byte into LCDPixelsA which the
-// render code thresholded against t_on / t_off. On Playdate, the LCDPixelsA
-// store is dead memory traffic in a memory-bound loop (see DecayRefresh
-// in source/MinxLCD.c). Instead, we precompute "does this sh value clear
-// the high/mid threshold" for the 16 possible sh values once per contrast
-// change, then sample LCDPixelsAS[] directly. Same math, ~25% less memory
-// traffic in DecayRefresh per PM frame.
+// a 4-bit on/off history per pixel in LCDPixelsAS. We precompute "does this
+// sh value clear the high/mid threshold" for all 16 sh values once per
+// contrast change, then sample LCDPixelsAS[] directly — same math as the
+// original pipeline but ~25% less memory traffic in DecayRefresh per frame.
 static uint8_t pm_sh_to_high[16];
 static uint8_t pm_sh_to_mid[16];
 static int pm_lut_p0_cached = -1;
 static int pm_lut_p1_cached = -1;
 
-static const uint8_t pm_bits_actives_4[16] = {
-	0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4
-};
+static const uint8_t pm_bits_actives_4[16] = {0, 1, 1, 2, 1, 2, 2, 3,
+                                              1, 2, 2, 3, 2, 3, 3, 4};
 
-static void pm_rebuild_threshold_luts(void)
-{
-	const int p0 = MinxLCD.Pixel0Intensity;
-	const int p1 = MinxLCD.Pixel1Intensity;
-	const int span = p1 - p0;
-	const uint8_t t_off = (uint8_t)(p0 + (3 * span) / 8);
-	const uint8_t t_on  = (uint8_t)(p0 + (5 * span) / 8);
-	for (int sh = 0; sh < 16; sh++) {
-		int level = pm_bits_actives_4[sh];
-		int decay = (p0 * (4 - level) + p1 * level) >> 2;
-		pm_sh_to_high[sh] = (decay >= t_on)  ? 1 : 0;
-		pm_sh_to_mid [sh] = (decay >= t_off) ? 1 : 0;
-	}
-	pm_lut_p0_cached = p0;
-	pm_lut_p1_cached = p1;
+static void pm_rebuild_threshold_luts(void) {
+  const int p0 = MinxLCD.Pixel0Intensity;
+  const int p1 = MinxLCD.Pixel1Intensity;
+  const int span = p1 - p0;
+  const uint8_t t_off = (uint8_t)(p0 + (3 * span) / 8);
+  const uint8_t t_on = (uint8_t)(p0 + (5 * span) / 8);
+  for (int sh = 0; sh < 16; sh++) {
+    int level = pm_bits_actives_4[sh];
+    int decay = (p0 * (4 - level) + p1 * level) >> 2;
+    pm_sh_to_high[sh] = (decay >= t_on) ? 1 : 0;
+    pm_sh_to_mid[sh] = (decay >= t_off) ? 1 : 0;
+  }
+  pm_lut_p0_cached = p0;
+  pm_lut_p1_cached = p1;
 }
 
-static inline void pm_ensure_threshold_luts(void)
-{
-	if (MinxLCD.Pixel0Intensity != pm_lut_p0_cached ||
-	    MinxLCD.Pixel1Intensity != pm_lut_p1_cached) {
-		pm_rebuild_threshold_luts();
-	}
+static inline void pm_ensure_threshold_luts(void) {
+  if (MinxLCD.Pixel0Intensity != pm_lut_p0_cached ||
+      MinxLCD.Pixel1Intensity != pm_lut_p1_cached) {
+    pm_rebuild_threshold_luts();
+  }
 }
 
 // 0 in LCDPixelsD = pixel off = light = white = bit set on Playdate.
@@ -515,803 +454,809 @@ static inline void pm_ensure_threshold_luts(void)
 // On a 1-bit panel that's just visible flicker. To suppress it we run the
 // emulator in LCDMODE_ANALOG: MinxLCD_DecayRefresh keeps a 4-frame history
 // per pixel in LCDPixelsAS, which we threshold via pm_sh_to_high / _mid.
-static void build_pm_row_bits(int y, uint8_t row[PM_W / 8])
-{
-	const int pm_bytes = PM_W / 8;
+static void build_pm_row_bits(int y, uint8_t row[PM_W / 8]) {
+  const int pm_bytes = PM_W / 8;
 
-	if (CommandLine.lcdmode == LCDMODE_2SHADES) {
-		const uint8_t *srcD = &LCDPixelsD[y * PM_W];
-		for (int bx = 0; bx < pm_bytes; bx++) {
-			row[bx] =
-				((srcD[0] == 0) << 7) | ((srcD[1] == 0) << 6) |
-				((srcD[2] == 0) << 5) | ((srcD[3] == 0) << 4) |
-				((srcD[4] == 0) << 3) | ((srcD[5] == 0) << 2) |
-				((srcD[6] == 0) << 1) | ((srcD[7] == 0)     );
-			srcD += 8;
-		}
-		return;
-	}
+  if (CommandLine.lcdmode == LCDMODE_2SHADES) {
+    const uint8_t *srcD = &LCDPixelsD[y * PM_W];
+    for (int bx = 0; bx < pm_bytes; bx++) {
+      row[bx] = ((srcD[0] == 0) << 7) | ((srcD[1] == 0) << 6) |
+                ((srcD[2] == 0) << 5) | ((srcD[3] == 0) << 4) |
+                ((srcD[4] == 0) << 3) | ((srcD[5] == 0) << 2) |
+                ((srcD[6] == 0) << 1) | ((srcD[7] == 0));
+      srcD += 8;
+    }
+    return;
+  }
 
-	const uint8_t dither = (y & 1) ? 0xAA : 0x55;
-	const uint8_t *srcAS = &LCDPixelsAS[y * PM_W];
+  const uint8_t dither = (y & 1) ? 0xAA : 0x55;
+  const uint8_t *srcAS = &LCDPixelsAS[y * PM_W];
 
-	for (int bx = 0; bx < pm_bytes; bx++) {
-		uint8_t high =
-			(pm_sh_to_high[srcAS[0]] << 7) | (pm_sh_to_high[srcAS[1]] << 6) |
-			(pm_sh_to_high[srcAS[2]] << 5) | (pm_sh_to_high[srcAS[3]] << 4) |
-			(pm_sh_to_high[srcAS[4]] << 3) | (pm_sh_to_high[srcAS[5]] << 2) |
-			(pm_sh_to_high[srcAS[6]] << 1) | (pm_sh_to_high[srcAS[7]]     );
-		uint8_t mid =
-			(pm_sh_to_mid[srcAS[0]] << 7) | (pm_sh_to_mid[srcAS[1]] << 6) |
-			(pm_sh_to_mid[srcAS[2]] << 5) | (pm_sh_to_mid[srcAS[3]] << 4) |
-			(pm_sh_to_mid[srcAS[4]] << 3) | (pm_sh_to_mid[srcAS[5]] << 2) |
-			(pm_sh_to_mid[srcAS[6]] << 1) | (pm_sh_to_mid[srcAS[7]]     );
-		srcAS += 8;
+  for (int bx = 0; bx < pm_bytes; bx++) {
+    uint8_t high =
+        (pm_sh_to_high[srcAS[0]] << 7) | (pm_sh_to_high[srcAS[1]] << 6) |
+        (pm_sh_to_high[srcAS[2]] << 5) | (pm_sh_to_high[srcAS[3]] << 4) |
+        (pm_sh_to_high[srcAS[4]] << 3) | (pm_sh_to_high[srcAS[5]] << 2) |
+        (pm_sh_to_high[srcAS[6]] << 1) | (pm_sh_to_high[srcAS[7]]);
+    uint8_t mid =
+        (pm_sh_to_mid[srcAS[0]] << 7) | (pm_sh_to_mid[srcAS[1]] << 6) |
+        (pm_sh_to_mid[srcAS[2]] << 5) | (pm_sh_to_mid[srcAS[3]] << 4) |
+        (pm_sh_to_mid[srcAS[4]] << 3) | (pm_sh_to_mid[srcAS[5]] << 2) |
+        (pm_sh_to_mid[srcAS[6]] << 1) | (pm_sh_to_mid[srcAS[7]]);
+    srcAS += 8;
 
-		row[bx] = (uint8_t)~(high | (mid & dither));
-	}
+    row[bx] = (uint8_t)~(high | (mid & dither));
+  }
 }
 
-static void render_screen_3x(uint8_t *fb)
-{
-	const int byte_x = SCALE_3X_X / 8;
-	const int pm_bytes = PM_W / 8;
+static void render_screen_3x(uint8_t *fb) {
+  const int byte_x = SCALE_3X_X / 8;
+  const int pm_bytes = PM_W / 8;
 
-	if (CommandLine.lcdmode == LCDMODE_2SHADES) {
-		for (int y = 0; y < PM_H; y++) {
-			const uint8_t *srcD = &LCDPixelsD[y * PM_W];
-			uint8_t *dst0 = fb + (SCALE_3X_Y + y * 3) * LCD_ROWSIZE + byte_x;
-			uint8_t *dst1 = dst0 + LCD_ROWSIZE;
-			uint8_t *dst2 = dst1 + LCD_ROWSIZE;
+  if (CommandLine.lcdmode == LCDMODE_2SHADES) {
+    for (int y = 0; y < PM_H; y++) {
+      const uint8_t *srcD = &LCDPixelsD[y * PM_W];
+      uint8_t *dst0 = fb + (SCALE_3X_Y + y * 3) * LCD_ROWSIZE + byte_x;
+      uint8_t *dst1 = dst0 + LCD_ROWSIZE;
+      uint8_t *dst2 = dst1 + LCD_ROWSIZE;
 
-			for (int bx = 0; bx < pm_bytes; bx++) {
-				uint8_t b =
-					((srcD[0] == 0) << 7) | ((srcD[1] == 0) << 6) |
-					((srcD[2] == 0) << 5) | ((srcD[3] == 0) << 4) |
-					((srcD[4] == 0) << 3) | ((srcD[5] == 0) << 2) |
-					((srcD[6] == 0) << 1) | ((srcD[7] == 0)     );
-				srcD += 8;
+      for (int bx = 0; bx < pm_bytes; bx++) {
+        uint8_t b = ((srcD[0] == 0) << 7) | ((srcD[1] == 0) << 6) |
+                    ((srcD[2] == 0) << 5) | ((srcD[3] == 0) << 4) |
+                    ((srcD[4] == 0) << 3) | ((srcD[5] == 0) << 2) |
+                    ((srcD[6] == 0) << 1) | ((srcD[7] == 0));
+        srcD += 8;
 
-				const uint8_t *e = expand_lut_3x[b];
-				dst0[0] = e[0]; dst0[1] = e[1]; dst0[2] = e[2];
-				dst1[0] = e[0]; dst1[1] = e[1]; dst1[2] = e[2];
-				dst2[0] = e[0]; dst2[1] = e[1]; dst2[2] = e[2];
-				dst0 += 3; dst1 += 3; dst2 += 3;
-			}
-		}
+        const uint8_t *e = expand_lut_3x[b];
+        dst0[0] = e[0];
+        dst0[1] = e[1];
+        dst0[2] = e[2];
+        dst1[0] = e[0];
+        dst1[1] = e[1];
+        dst1[2] = e[2];
+        dst2[0] = e[0];
+        dst2[1] = e[1];
+        dst2[2] = e[2];
+        dst0 += 3;
+        dst1 += 3;
+        dst2 += 3;
+      }
+    }
 
-		pd->graphics->markUpdatedRows(SCALE_3X_Y, SCALE_3X_Y + SCALE_3X_H - 1);
-		return;
-	}
+    pd->graphics->markUpdatedRows(SCALE_3X_Y, SCALE_3X_Y + SCALE_3X_H - 1);
+    return;
+  }
 
-	for (int y = 0; y < PM_H; y++) {
-		const uint8_t *srcAS = &LCDPixelsAS[y * PM_W];
-		uint8_t *dst0 = fb + (SCALE_3X_Y + y * 3) * LCD_ROWSIZE + byte_x;
-		uint8_t *dst1 = dst0 + LCD_ROWSIZE;
-		uint8_t *dst2 = dst1 + LCD_ROWSIZE;
-		const uint8_t dither = (y & 1) ? 0xAA : 0x55;
+  for (int y = 0; y < PM_H; y++) {
+    const uint8_t *srcAS = &LCDPixelsAS[y * PM_W];
+    uint8_t *dst0 = fb + (SCALE_3X_Y + y * 3) * LCD_ROWSIZE + byte_x;
+    uint8_t *dst1 = dst0 + LCD_ROWSIZE;
+    uint8_t *dst2 = dst1 + LCD_ROWSIZE;
+    const uint8_t dither = (y & 1) ? 0xAA : 0x55;
 
-		for (int bx = 0; bx < pm_bytes; bx++) {
-			uint8_t high =
-				(pm_sh_to_high[srcAS[0]] << 7) | (pm_sh_to_high[srcAS[1]] << 6) |
-				(pm_sh_to_high[srcAS[2]] << 5) | (pm_sh_to_high[srcAS[3]] << 4) |
-				(pm_sh_to_high[srcAS[4]] << 3) | (pm_sh_to_high[srcAS[5]] << 2) |
-				(pm_sh_to_high[srcAS[6]] << 1) | (pm_sh_to_high[srcAS[7]]     );
-			uint8_t mid =
-				(pm_sh_to_mid[srcAS[0]] << 7) | (pm_sh_to_mid[srcAS[1]] << 6) |
-				(pm_sh_to_mid[srcAS[2]] << 5) | (pm_sh_to_mid[srcAS[3]] << 4) |
-				(pm_sh_to_mid[srcAS[4]] << 3) | (pm_sh_to_mid[srcAS[5]] << 2) |
-				(pm_sh_to_mid[srcAS[6]] << 1) | (pm_sh_to_mid[srcAS[7]]     );
-			srcAS += 8;
+    for (int bx = 0; bx < pm_bytes; bx++) {
+      uint8_t high =
+          (pm_sh_to_high[srcAS[0]] << 7) | (pm_sh_to_high[srcAS[1]] << 6) |
+          (pm_sh_to_high[srcAS[2]] << 5) | (pm_sh_to_high[srcAS[3]] << 4) |
+          (pm_sh_to_high[srcAS[4]] << 3) | (pm_sh_to_high[srcAS[5]] << 2) |
+          (pm_sh_to_high[srcAS[6]] << 1) | (pm_sh_to_high[srcAS[7]]);
+      uint8_t mid =
+          (pm_sh_to_mid[srcAS[0]] << 7) | (pm_sh_to_mid[srcAS[1]] << 6) |
+          (pm_sh_to_mid[srcAS[2]] << 5) | (pm_sh_to_mid[srcAS[3]] << 4) |
+          (pm_sh_to_mid[srcAS[4]] << 3) | (pm_sh_to_mid[srcAS[5]] << 2) |
+          (pm_sh_to_mid[srcAS[6]] << 1) | (pm_sh_to_mid[srcAS[7]]);
+      srcAS += 8;
 
-			const uint8_t b = (uint8_t)~(high | (mid & dither));
-			const uint8_t *e = expand_lut_3x[b];
-			dst0[0] = e[0]; dst0[1] = e[1]; dst0[2] = e[2];
-			dst1[0] = e[0]; dst1[1] = e[1]; dst1[2] = e[2];
-			dst2[0] = e[0]; dst2[1] = e[1]; dst2[2] = e[2];
-			dst0 += 3; dst1 += 3; dst2 += 3;
-		}
-	}
+      const uint8_t b = (uint8_t)~(high | (mid & dither));
+      const uint8_t *e = expand_lut_3x[b];
+      dst0[0] = e[0];
+      dst0[1] = e[1];
+      dst0[2] = e[2];
+      dst1[0] = e[0];
+      dst1[1] = e[1];
+      dst1[2] = e[2];
+      dst2[0] = e[0];
+      dst2[1] = e[1];
+      dst2[2] = e[2];
+      dst0 += 3;
+      dst1 += 3;
+      dst2 += 3;
+    }
+  }
 
-	pd->graphics->markUpdatedRows(SCALE_3X_Y, SCALE_3X_Y + SCALE_3X_H - 1);
+  pd->graphics->markUpdatedRows(SCALE_3X_Y, SCALE_3X_Y + SCALE_3X_H - 1);
 }
 
-static void render_screen_375x(uint8_t *fb)
-{
-	const int byte_x = SCALE_375X_X / 8;
-	const int pm_bytes = PM_W / 8;
-	uint8_t row[PM_W / 8];
-	uint8_t scaled_row[SCALE_375X_W / 8];
-	int dst_y = SCALE_375X_Y;
+static void render_screen_375x(uint8_t *fb) {
+  const int byte_x = SCALE_375X_X / 8;
+  const int pm_bytes = PM_W / 8;
+  uint8_t row[PM_W / 8];
+  uint8_t scaled_row[SCALE_375X_W / 8];
+  int dst_y = SCALE_375X_Y;
 
-	for (int y = 0; y < PM_H; y++) {
-		build_pm_row_bits(y, row);
-		for (int quad = 0; quad < pm_bytes / 4; quad++) {
-			expand_quad_375x(row[quad * 4 + 0], row[quad * 4 + 1],
-			                 row[quad * 4 + 2], row[quad * 4 + 3],
-			                 &scaled_row[quad * 15]);
-		}
+  for (int y = 0; y < PM_H; y++) {
+    build_pm_row_bits(y, row);
+    for (int quad = 0; quad < pm_bytes / 4; quad++) {
+      expand_quad_375x(row[quad * 4 + 0], row[quad * 4 + 1], row[quad * 4 + 2],
+                       row[quad * 4 + 3], &scaled_row[quad * 15]);
+    }
 
-		// Per 4 src rows: 4,4,4,3 repeats = 15 dst rows. 64*15/4 = 240.
-		const int repeats = ((y & 3) == 3) ? 3 : 4;
-		for (int r = 0; r < repeats; r++) {
-			uint8_t *dst = fb + (dst_y + r) * LCD_ROWSIZE + byte_x;
-			memcpy(dst, scaled_row, sizeof(scaled_row));
-		}
-		dst_y += repeats;
-	}
+    // Per 4 src rows: 4,4,4,3 repeats = 15 dst rows. 64*15/4 = 240.
+    const int repeats = ((y & 3) == 3) ? 3 : 4;
+    for (int r = 0; r < repeats; r++) {
+      uint8_t *dst = fb + (dst_y + r) * LCD_ROWSIZE + byte_x;
+      memcpy(dst, scaled_row, sizeof(scaled_row));
+    }
+    dst_y += repeats;
+  }
 
-	pd->graphics->markUpdatedRows(SCALE_375X_Y, SCALE_375X_Y + SCALE_375X_H - 1);
+  pd->graphics->markUpdatedRows(SCALE_375X_Y, SCALE_375X_Y + SCALE_375X_H - 1);
 }
 
-static void render_screen(void)
-{
-	if (!LCDDirty) return;
-	LCDDirty = 0;
+static void render_screen(void) {
+  if (!LCDDirty)
+    return;
+  LCDDirty = 0;
 
-	// Refresh the sh→threshold LUTs if the game adjusted contrast since
-	// last render. Cheap check (two int compares); LUT rebuild itself only
-	// runs on actual contrast change.
-	pm_ensure_threshold_luts();
+  // Rebuild sh→threshold LUTs if the game adjusted contrast since last render.
+  pm_ensure_threshold_luts();
 
-	uint8_t *fb = pd->graphics->getFrame();
-	if (screen_scale_mode == RENDER_SCALE_3X)
-		render_screen_3x(fb);
-	else
-		render_screen_375x(fb);
+  uint8_t *fb = pd->graphics->getFrame();
+  if (screen_scale_mode == RENDER_SCALE_3X)
+    render_screen_3x(fb);
+  else
+    render_screen_375x(fb);
 }
 
-// --- ROM picker -----------------------------------------------------------
-//
-// Delegates to pd-rom-picker (libs/pd-rom-picker), a shared library used
-// across all emulator ports. It scans ROM_DIR, filters by extension,
-// sorts alphabetically, and renders its own scrollable list UI.
+// --- ROM loading --------------------------------------------------------
 
-static const char *ROM_DIR = "/Shared/Emulation/pm/games/";
+// kFileRead | kFileReadData: search the data side (which covers the cross-app
+// /Shared/ folder added in SDK 2.4) AND the bundle. With kFileRead alone the
+// API only searches the read-only pdx bundle, missing every ROM in /Shared/.
+static int load_rom(const char *path) {
+  SDFile *f = pd->file->open(path, kFileRead | kFileReadData);
+  if (!f) {
+    const char *err = pd->file->geterr();
+    pd->system->logToConsole("%s: file->open(%s) failed: %s", AppName, path,
+                             err ? err : "(no error)");
+    return 0;
+  }
 
-static void start_emulation_with_rom(const char *path);
+  pd->file->seek(f, 0, SEEK_END);
+  int size = pd->file->tell(f);
+  pd->file->seek(f, 0, SEEK_SET);
 
-// Called by the library when the player presses A on a valid ROM entry.
-// path is the full absolute path (ROM_DIR + filename).
-static void rom_selected_cb(const char *path, void *userdata)
-{
-	(void)userdata;
-	start_emulation_with_rom(path);
+  if (size <= 0) {
+    pd->file->close(f);
+    return 0;
+  }
+
+  // Free the previous ROM's buffer before allocating a new one.
+  if (rom_buf) {
+    free(rom_buf);
+    rom_buf = NULL;
+  }
+
+  rom_buf = (uint8_t *)malloc((size_t)size);
+  if (!rom_buf) {
+    pd->file->close(f);
+    return 0;
+  }
+
+  pd->file->read(f, rom_buf, (unsigned int)size);
+  pd->file->close(f);
+
+  return PokeMini_SetMINMem(rom_buf, size);
 }
 
-// --- EEPROM persistence via Playdate file API ---------------------------------
-// Implemented in PokeMini_Playdate_EEPROM.c, listed after Hardware.c in
-// GAME_SOURCES to keep PokeMini_EmulateFrame out of I-cache set 19.
-// See NOTES.md "EEPROM save/load and I-cache aliasing".
+// --- EEPROM -------------------------------------------------------------
+
+// Implemented in PokeMini_Playdate_EEPROM.c.
 void ensure_eep_dir(void);
 void setup_eeprom_path(const char *rom_path);
-int  pd_load_eeprom(const char *filename);
-int  pd_save_eeprom(const char *filename);
+int pd_load_eeprom(const char *filename);
+int pd_save_eeprom(const char *filename);
 
-// Wire a freshly-loaded ROM into the emulator and switch into emulation mode.
-// path == NULL means "boot with FreeBIOS only, no cart" — used when
-// /Shared/Emulation/pm/games/ is empty. The FreeBIOS shows its own splash
-// in that case, which is what the user sees when no ROM is loaded.
-//
-// Mirrors PokeMini_LoadFromCommandLines: soft reset (the hard-reset BIOS
-// path leaves SYS_CTRL3 in a state where the cart can stall before enabling
-// the PRC 72 Hz interrupt), then ApplyChanges to commit any CommandLine
-// tweaks the picker may have changed.
-static void menu_item_picker_cb(void *userdata);
-static void menu_item_lcd_mode_cb(void *userdata);
-static void menu_item_screen_scale_cb(void *userdata);
-static void menu_item_fps_cb(void *userdata);
+// --- Settings -----------------------------------------------------------
 
-// Playdate caps the system-menu custom items at 3. Different items make sense
-// in the two app modes: the "ROM Picker" jump is redundant while we're already
-// in the picker, and the FPS toggle is uninteresting once the player is in a
-// game (and there's no slot for it then). Rebuild the menu on each transition.
-static void rebuild_system_menu(void)
-{
-	pd->system->removeAllMenuItems();
-	lcd_mode_menu_item = NULL;
-	screen_scale_menu_item = NULL;
-	fps_menu_item = NULL;
-
-	if (app_mode == MODE_PICKER) {
-		fps_menu_item = pd->system->addCheckmarkMenuItem(
-			"Show FPS", fps_visible, menu_item_fps_cb, NULL);
-	} else {
-		pd->system->addMenuItem("ROM Picker", menu_item_picker_cb, NULL);
-	}
-
-	lcd_mode_menu_item = pd->system->addOptionsMenuItem(
-		"LCD Mode", lcd_mode_options, 2, menu_item_lcd_mode_cb, NULL);
-	if (lcd_mode_menu_item) {
-		pd->system->setMenuItemValue(lcd_mode_menu_item,
-			CommandLine.lcdmode == LCDMODE_2SHADES ? 1 : 0);
-	}
-	screen_scale_menu_item = pd->system->addOptionsMenuItem(
-		"Scale", screen_scale_options, 2, menu_item_screen_scale_cb, NULL);
-	if (screen_scale_menu_item) {
-		pd->system->setMenuItemValue(screen_scale_menu_item,
-			screen_scale_mode == RENDER_SCALE_375X ? 1 : 0);
-	}
-}
-
-static void start_emulation_with_rom(const char *path)
-{
-	// If switching ROMs mid-session, flush the current EEPROM before it
-	// gets overwritten by the new ROM's load.
-	if (app_mode == MODE_EMULATOR && PokeMini_EEPROMWritten
-	        && StringIsSet(CommandLine.eeprom_file)) {
-		PokeMini_SaveEEPROMFile(CommandLine.eeprom_file);
-		PokeMini_EEPROMWritten = 0;
-	}
-
-	if (path == NULL) {
-		pd->system->logToConsole("%s: starting with FreeBIOS only (no ROM)", AppName);
-		CommandLine.eeprom_file[0] = 0;
-	} else if (!load_rom(path)) {
-		pd->system->logToConsole("%s: load_rom(%s) failed - falling back to FreeBIOS",
-			AppName, path);
-		CommandLine.eeprom_file[0] = 0;
-	} else {
-		pd->system->logToConsole("%s: ROM loaded: %s size=%d mask=0x%X",
-			AppName, path, PM_ROM_Size, PM_ROM_Mask);
-		setup_eeprom_path(path);
-	}
-
-	// Reset the EEPROM buffer to the erased state (0xFF) before loading
-	// this ROM's save. MinxIO_Reset does NOT touch the 8192-byte buffer, so
-	// without this a ROM's first launch would silently inherit the previous
-	// ROM's EEPROM data. 0xFF is correct — it is the blank/erased state of
-	// a real PM EEPROM chip.
-	MinxIO_FormatEEPROM();
-
-	// Swap the update callback so the first frame after this ROM load does the
-	// EEPROM read + clock sync (via update_first_after_rom), and every frame
-	// after that runs the clean steady-state update(). Keeping the check OUT
-	// of update() leaves its hot-loop branches in the same BTB slots as the
-	// no-EEPROM baseline build. See NOTES.md "EEPROM via callback swap".
-#if POKEMINI_PM_RAM_DTCM
-	pd->system->setUpdateCallback(
-		StringIsSet(CommandLine.eeprom_file)
-		    ? update_first_after_rom_userstack_wrapper
-		    : update_userstack_wrapper,
-		pd);
-#else
-	pd->system->setUpdateCallback(
-		StringIsSet(CommandLine.eeprom_file) ? update_first_after_rom : update,
-		pd);
-#endif
-
-	// Match upstream PokeMini_LoadROM ordering: EEPROM is ready before the
-	// soft reset, then the reset performs BIOS/CPU setup and applies host RTC.
-	// The Playdate device has no libc-backed time(), so suppress the generic
-	// sync during reset and apply the Playdate clock immediately after.
-	int saved_updatertc = CommandLine.updatertc;
-	CommandLine.updatertc = 0;
-	PokeMini_Reset(0);
-	CommandLine.updatertc = saved_updatertc;
-	PokeMini_ApplyChanges();
-	MinxAudio_ChangeEngine(CommandLine.sound);
-
-	// Clock sync happens in the deferred EEPROM-load block in update(), after
-	// PokeMini_LoadEEPROMFile(), so the time fields are set on top of saved
-	// data rather than getting overwritten by the file load.
-#ifdef PD_OPCODE_DIAG
-	MinxCPU_OpcodeDiagReset();
-#endif
-
-	// Repaint the whole framebuffer black so the border around the PM screen
-	// stays black without per-frame redraws (and overwrites the picker UI).
-	uint8_t *fb = pd->graphics->getFrame();
-	memset(fb, 0x00, (size_t)(LCD_ROWSIZE * LCD_ROWS));
-	pd->graphics->markUpdatedRows(0, LCD_ROWS - 1);
-
-	LCDDirty = 1;
-	app_mode = MODE_EMULATOR;
-	rebuild_system_menu();
-	start_audio_source();
-}
-
-// Switch back to the picker. Called from the Playdate system menu so the
-// player can change ROM without quitting the app. We don't rescan
-// /Shared/... because connecting USB to add ROMs suspends the app — when
-// the user re-launches, scan_rom_dir runs again from kEventInit.
-static void return_to_picker(void)
-{
-	app_mode = MODE_PICKER;
-	rebuild_system_menu();
-	stop_audio_source();
-}
-
-// User-toggleable settings persist to the app's Data directory across runs.
 // Tiny key=value text file so adding/removing keys later doesn't break old
 // installs (unknown keys are ignored, missing keys keep their compiled-in
 // default).
 #define SETTINGS_FILE "settings.cfg"
 
-static void save_settings(void)
-{
-	SDFile *f = pd->file->open(SETTINGS_FILE, kFileWrite);
-	if (!f) {
-		pd->system->logToConsole("%s: settings save failed (open)", AppName);
-		return;
-	}
-	char buf[128];
-	int n = snprintf(buf, sizeof(buf),
-	                 "fps=%d\nscale=%d\nlcd=%d\n",
-	                 fps_visible,
-	                 screen_scale_mode == RENDER_SCALE_375X ? 1 : 0,
-	                 CommandLine.lcdmode == LCDMODE_2SHADES ? 0 : 1);
-	if (n > 0) pd->file->write(f, buf, (unsigned int)n);
-	pd->file->close(f);
+static void save_settings(void) {
+  SDFile *f = pd->file->open(SETTINGS_FILE, kFileWrite);
+  if (!f) {
+    pd->system->logToConsole("%s: settings save failed (open)", AppName);
+    return;
+  }
+  char buf[128];
+  int n = snprintf(buf, sizeof(buf), "fps=%d\nscale=%d\nlcd=%d\n", fps_visible,
+                   screen_scale_mode == RENDER_SCALE_375X ? 1 : 0,
+                   CommandLine.lcdmode == LCDMODE_2SHADES ? 0 : 1);
+  if (n > 0)
+    pd->file->write(f, buf, (unsigned int)n);
+  pd->file->close(f);
 }
 
-static void load_settings(void)
-{
-	SDFile *f = pd->file->open(SETTINGS_FILE, kFileRead | kFileReadData);
-	if (!f) return;  // first run, keep defaults
+static void load_settings(void) {
+  SDFile *f = pd->file->open(SETTINGS_FILE, kFileRead | kFileReadData);
+  if (!f)
+    return; // first run, keep defaults
 
-	char buf[256];
-	int n = pd->file->read(f, buf, sizeof(buf) - 1);
-	pd->file->close(f);
-	if (n <= 0) return;
-	buf[n] = 0;
+  char buf[256];
+  int n = pd->file->read(f, buf, sizeof(buf) - 1);
+  pd->file->close(f);
+  if (n <= 0)
+    return;
+  buf[n] = 0;
 
-	char *line = buf;
-	while (line && *line) {
-		char *nl = strchr(line, '\n');
-		if (nl) *nl = 0;
-		char *eq = strchr(line, '=');
-		if (eq) {
-			*eq = 0;
-			int v = atoi(eq + 1);
-			if (!strcmp(line, "fps"))   fps_visible = v ? 1 : 0;
-			else if (!strcmp(line, "scale")) screen_scale_mode = v ? RENDER_SCALE_375X : RENDER_SCALE_3X;
-			else if (!strcmp(line, "lcd"))   CommandLine.lcdmode = v ? LCDMODE_ANALOG : LCDMODE_2SHADES;
-		}
-		line = nl ? nl + 1 : NULL;
-	}
+  char *line = buf;
+  while (line && *line) {
+    char *nl = strchr(line, '\n');
+    if (nl)
+      *nl = 0;
+    char *eq = strchr(line, '=');
+    if (eq) {
+      *eq = 0;
+      int v = atoi(eq + 1);
+      if (!strcmp(line, "fps"))
+        fps_visible = v ? 1 : 0;
+      else if (!strcmp(line, "scale"))
+        screen_scale_mode = v ? RENDER_SCALE_375X : RENDER_SCALE_3X;
+      else if (!strcmp(line, "lcd"))
+        CommandLine.lcdmode = v ? LCDMODE_ANALOG : LCDMODE_2SHADES;
+    }
+    line = nl ? nl + 1 : NULL;
+  }
 }
 
-static void menu_item_picker_cb(void *userdata)
-{
-	(void)userdata;
-	return_to_picker();
+// --- System menu --------------------------------------------------------
+
+// Playdate caps the system-menu custom items at 3. Different items make sense
+// in the two app modes: the "ROM Picker" jump is redundant while we're already
+// in the picker, and the FPS toggle is uninteresting once the player is in a
+// game. Rebuild the menu on each mode transition.
+
+static void menu_item_picker_cb(void *userdata) {
+  (void)userdata;
+  return_to_picker();
 }
 
-static void menu_item_lcd_mode_cb(void *userdata)
-{
-	(void)userdata;
-	if (!lcd_mode_menu_item) return;
+static void menu_item_lcd_mode_cb(void *userdata) {
+  (void)userdata;
+  if (!lcd_mode_menu_item)
+    return;
 
-	int fast = pd->system->getMenuItemValue(lcd_mode_menu_item);
-	int new_mode = fast ? LCDMODE_2SHADES : LCDMODE_ANALOG;
-	if (CommandLine.lcdmode == new_mode) return;
+  int fast = pd->system->getMenuItemValue(lcd_mode_menu_item);
+  int new_mode = fast ? LCDMODE_2SHADES : LCDMODE_ANALOG;
+  if (CommandLine.lcdmode == new_mode)
+    return;
 
-	CommandLine.lcdmode = new_mode;
-	PokeMini_ApplyChanges();
-	LCDDirty = MINX_DIRTYSCR;
-	save_settings();
+  CommandLine.lcdmode = new_mode;
+  PokeMini_ApplyChanges();
+  LCDDirty = MINX_DIRTYSCR;
+  save_settings();
 }
 
-static void menu_item_fps_cb(void *userdata)
-{
-	(void)userdata;
-	if (!fps_menu_item) return;
-	int new_val = pd->system->getMenuItemValue(fps_menu_item) ? 1 : 0;
-	if (new_val == fps_visible) return;
-	fps_visible = new_val;
-	save_settings();
+static void menu_item_fps_cb(void *userdata) {
+  (void)userdata;
+  if (!fps_menu_item)
+    return;
+  int new_val = pd->system->getMenuItemValue(fps_menu_item) ? 1 : 0;
+  if (new_val == fps_visible)
+    return;
+  fps_visible = new_val;
+  save_settings();
 }
 
-static void menu_item_screen_scale_cb(void *userdata)
-{
-	(void)userdata;
-	if (!screen_scale_menu_item) return;
+static void menu_item_screen_scale_cb(void *userdata) {
+  (void)userdata;
+  if (!screen_scale_menu_item)
+    return;
 
-	int new_scale = pd->system->getMenuItemValue(screen_scale_menu_item)
-		? RENDER_SCALE_375X : RENDER_SCALE_3X;
-	if (screen_scale_mode == new_scale) return;
+  int new_scale = pd->system->getMenuItemValue(screen_scale_menu_item)
+                      ? RENDER_SCALE_375X
+                      : RENDER_SCALE_3X;
+  if (screen_scale_mode == new_scale)
+    return;
 
-	screen_scale_mode = new_scale;
-	uint8_t *fb = pd->graphics->getFrame();
-	memset(fb, 0x00, (size_t)(LCD_ROWSIZE * LCD_ROWS));
-	pd->graphics->markUpdatedRows(0, LCD_ROWS - 1);
-	LCDDirty = MINX_DIRTYSCR;
-	save_settings();
+  screen_scale_mode = new_scale;
+  uint8_t *fb = pd->graphics->getFrame();
+  memset(fb, 0x00, (size_t)(LCD_ROWSIZE * LCD_ROWS));
+  pd->graphics->markUpdatedRows(0, LCD_ROWS - 1);
+  LCDDirty = MINX_DIRTYSCR;
+  save_settings();
 }
+
+static void rebuild_system_menu(void) {
+  pd->system->removeAllMenuItems();
+  lcd_mode_menu_item = NULL;
+  screen_scale_menu_item = NULL;
+  fps_menu_item = NULL;
+
+  if (app_mode == MODE_PICKER) {
+    fps_menu_item = pd->system->addCheckmarkMenuItem("Show FPS", fps_visible,
+                                                     menu_item_fps_cb, NULL);
+  } else {
+    pd->system->addMenuItem("ROM Picker", menu_item_picker_cb, NULL);
+  }
+
+  lcd_mode_menu_item = pd->system->addOptionsMenuItem(
+      "LCD Mode", lcd_mode_options, 2, menu_item_lcd_mode_cb, NULL);
+  if (lcd_mode_menu_item) {
+    pd->system->setMenuItemValue(
+        lcd_mode_menu_item, CommandLine.lcdmode == LCDMODE_2SHADES ? 1 : 0);
+  }
+  screen_scale_menu_item = pd->system->addOptionsMenuItem(
+      "Scale", screen_scale_options, 2, menu_item_screen_scale_cb, NULL);
+  if (screen_scale_menu_item) {
+    pd->system->setMenuItemValue(
+        screen_scale_menu_item, screen_scale_mode == RENDER_SCALE_375X ? 1 : 0);
+  }
+}
+
+// --- ROM picker ---------------------------------------------------------
+
+// Delegates to pd-rom-picker (libs/pd-rom-picker), a shared library used
+// across all emulator ports.
+static const char *ROM_DIR = "/Shared/Emulation/pm/games/";
+
+static void rom_selected_cb(const char *path, void *userdata) {
+  (void)userdata;
+  start_emulation_with_rom(path);
+}
+
+// --- EEPROM deferred load -----------------------------------------------
 
 // Reads the .eep save file off flash and writes the PM RTC fields with the
-// Playdate's wall-clock time. Called once per ROM switch from the one-shot
-// update_first_after_rom() callback (see below) — never from update()'s hot
-// path. The wall-clock sync follows the file read so the timestamp bytes
-// land on top of the restored save data rather than getting overwritten.
-static void eeprom_deferred_load_and_sync(void)
-{
-	pd_load_eeprom(CommandLine.eeprom_file);
-	struct PDDateTime dt;
-	pd->system->convertEpochToDateTime(
-	    pd->system->getSecondsSinceEpoch(NULL), &dt);
-	MinxIO_SetTimeStamp(
-	    (uint8_t)(dt.year % 100),
-	    (uint8_t)dt.month,
-	    (uint8_t)dt.day,
-	    (uint8_t)dt.hour,
-	    (uint8_t)dt.minute,
-	    (uint8_t)dt.second);
+// Playdate's wall-clock time. Called once per ROM switch from
+// update_first_after_rom. The wall-clock sync follows the file read so the
+// timestamp bytes land on top of the restored save data rather than getting
+// overwritten.
+static void eeprom_deferred_load_and_sync(void) {
+  pd_load_eeprom(CommandLine.eeprom_file);
+  struct PDDateTime dt;
+  pd->system->convertEpochToDateTime(pd->system->getSecondsSinceEpoch(NULL),
+                                     &dt);
+  MinxIO_SetTimeStamp((uint8_t)(dt.year % 100), (uint8_t)dt.month,
+                      (uint8_t)dt.day, (uint8_t)dt.hour, (uint8_t)dt.minute,
+                      (uint8_t)dt.second);
 }
 
-// Update callback: called by the Playdate runtime at 30 fps (target).
-// Pokemon Mini runs natively at ~72 Hz. To keep emulated time matched to real
-// time we need 72/30 = 2.4 PM frames per display frame on average. Use an
-// integer fractional accumulator (numerator 12, denominator 5) to pace this
-// exactly: across every 5 update calls we run 12 PM frames (pattern 2,2,3,2,3).
-// When display FPS dips below 30 the emulator runs proportionally slower; this
-// is preferable to time-based catch-up which trades display responsiveness for
-// emulation accuracy and tends to spiral under sustained load.
-static int update(void *userdata)
-{
-	(void)userdata;
+// --- Mode transitions ---------------------------------------------------
 
-	if (app_mode == MODE_PICKER) {
-		rom_picker_update();
-		return 1;
-	}
+// Wire a freshly-loaded ROM into the emulator and switch into emulation mode.
+// path == NULL means "boot with FreeBIOS only, no cart".
+//
+// Mirrors PokeMini_LoadFromCommandLines ordering: soft reset (the hard-reset
+// BIOS path leaves SYS_CTRL3 in a state where the cart can stall before
+// enabling the PRC 72 Hz interrupt), then ApplyChanges to commit any tweaks.
+static void start_emulation_with_rom(const char *path) {
+  // Flush current EEPROM before switching ROMs.
+  if (app_mode == MODE_EMULATOR && PokeMini_EEPROMWritten &&
+      StringIsSet(CommandLine.eeprom_file)) {
+    PokeMini_SaveEEPROMFile(CommandLine.eeprom_file);
+    PokeMini_EEPROMWritten = 0;
+  }
 
-#ifdef PD_PERF_DIAG
-	unsigned int update_start = PDPerf_NowUs();
-#endif
+  if (path == NULL) {
+    pd->system->logToConsole("%s: starting with FreeBIOS only (no ROM)",
+                             AppName);
+    CommandLine.eeprom_file[0] = 0;
+  } else if (!load_rom(path)) {
+    pd->system->logToConsole(
+        "%s: load_rom(%s) failed - falling back to FreeBIOS", AppName, path);
+    CommandLine.eeprom_file[0] = 0;
+  } else {
+    pd->system->logToConsole("%s: ROM loaded: %s size=%d mask=0x%X", AppName,
+                             path, PM_ROM_Size, PM_ROM_Mask);
+    setup_eeprom_path(path);
+  }
 
-	static int frame_accum = 0;
-	frame_accum += 12;
-	int pm_frames = frame_accum / 5;
-	frame_accum -= pm_frames * 5;
+  // Reset the EEPROM buffer to erased state (0xFF) before loading this ROM's
+  // save. Without this a ROM's first launch would inherit the previous ROM's
+  // EEPROM data. 0xFF is correct — it is the blank/erased state of a real
+  // PM EEPROM chip.
+  MinxIO_FormatEEPROM();
 
-	// PERF KEEPALIVE (do NOT strip). Two pieces, each load-bearing for a
-	// different firmware mechanism:
-	//
-	// 1. The per-update busy-loop keeps the M7 from idle-downclocking. The
-	//    Playdate firmware appears to ramp the core clock down when an app
-	//    looks idle to it; any sustained per-update work prevents that.
-	//    Confirmed 2026-05-31 by A/B test: replacing 4× getElapsedTime()
-	//    syscalls with a tight volatile NOP loop gave identical on-device
-	//    throughput. Either pattern works — the busy-loop is just cleaner
-	//    and avoids the syscall ritual. 2000 iterations ≈ a few microseconds.
-	//    `volatile` on the counter is required so -Os doesn't elide it.
-	//
-	// 2. The once-per-second format-rich logToConsole below keeps something
-	//    else warm (likely a USB serial / scheduler tick). Without it,
-	//    fps caps around 12-14 even with the busy-loop running. Constant-
-	//    string logs don't help; only format-rich (%f / %.1f / etc.) does.
-	//
-	// See NOTES.md "Perf-keepalive minimal recipe" and "Keepalive mechanism
-	// confirmed (2026-05-31)" for the full bisection history.
-	{
-		volatile unsigned int spin = 2000;
-		while (spin--) { __asm__ volatile("nop"); }
-
-		static int   keepalive_count = 0;
-		static int   keepalive_total = 0;
-		static unsigned int keepalive_t0 = 0;
-		keepalive_total++;
-		if (++keepalive_count >= 30) {
-			keepalive_count = 0;
-			unsigned int now = pd->system->getCurrentTimeMilliseconds();
-			unsigned int dt  = (keepalive_t0 == 0) ? 0 : now - keepalive_t0;
-			keepalive_t0 = now;
-			static float keepalive_f = 1.5f;
-			keepalive_f *= 1.0001f;
-			if (keepalive_f > 1.0e9f) keepalive_f = 1.5f;
-			pd->system->logToConsole(
-				"perf: total=%d dt=%ums (rate=%.1ffps) f=%.3f",
-				keepalive_total, dt,
-				dt > 0 ? 30000.0f / dt : 0.0f, keepalive_f);
-		}
-	}
-
-#ifdef PD_PERF_DIAG
-	unsigned int t0 = PDPerf_NowUs();
-#endif
-	{
-#if POKEMINI_ITCM_CALLBACKS
-		// ITCM hot-callback copy: memcpy the .itcm_pm region (containing
-		// MinxCPU_ITCMRead/Write) to a stack buffer (which lives in DTCM
-		// on the Playdate's Cortex-M7), repoint the g_pm_read/write
-		// function pointers at the stack copies, run emulation, restore.
-		// Pattern from Beetle VB / Red Viper. See NOTES.md
-		// "ITCM hot-callback copy".
-		extern uint8_t __itcm_pm_start[];
-		extern uint8_t __itcm_pm_end[];
-		extern uint8_t (*g_pm_read)(int, uint32_t);
-		extern void (*g_pm_write)(int, uint32_t, uint8_t);
-		extern uint8_t MinxCPU_ITCMRead(int, uint32_t);
-		extern void MinxCPU_ITCMWrite(int, uint32_t, uint8_t);
-
-		uintptr_t itcm_size = (uintptr_t)(__itcm_pm_end - __itcm_pm_start);
-		uint8_t stk_buf[1024] __attribute__((aligned(32)));
-		if (itcm_size <= sizeof(stk_buf)) {
-			__builtin_memcpy(stk_buf, __itcm_pm_start, itcm_size);
-			__asm__ volatile("dsb sy" ::: "memory");
-			__asm__ volatile("isb sy" ::: "memory");
-
-			// Compute offsets of each function within the .itcm_pm section,
-			// then add to stk_buf base. OR with 1 for Thumb mode.
-			uintptr_t read_off = (uintptr_t)MinxCPU_ITCMRead
-			                     - (uintptr_t)__itcm_pm_start;
-			uintptr_t write_off = (uintptr_t)MinxCPU_ITCMWrite
-			                     - (uintptr_t)__itcm_pm_start;
-			uint8_t (*saved_read)(int, uint32_t) = g_pm_read;
-			void (*saved_write)(int, uint32_t, uint8_t) = g_pm_write;
-			g_pm_read = (uint8_t (*)(int, uint32_t))
-			            (((uintptr_t)stk_buf + read_off) | 1);
-			g_pm_write = (void (*)(int, uint32_t, uint8_t))
-			            (((uintptr_t)stk_buf + write_off) | 1);
-
-			for (int i = 0; i < pm_frames; i++) PokeMini_EmulateFrame();
-
-			g_pm_read = saved_read;
-			g_pm_write = saved_write;
-		} else {
-			// Section grew beyond stk_buf budget — fall through, run with
-			// original (non-relocated) callbacks. Log once so we notice.
-			static int itcm_overflow_logged = 0;
-			if (!itcm_overflow_logged) {
-				pd->system->logToConsole(
-				    "ITCM section is %u bytes, exceeds stk_buf %u; running non-relocated",
-				    (unsigned)itcm_size, (unsigned)sizeof(stk_buf));
-				itcm_overflow_logged = 1;
-			}
-			for (int i = 0; i < pm_frames; i++) PokeMini_EmulateFrame();
-		}
+  // Swap the update callback so the first frame after this ROM load does the
+  // EEPROM read + clock sync (via update_first_after_rom), and every frame
+  // after that runs the clean steady-state update(). See NOTES.md
+  // "EEPROM via callback swap".
+#if POKEMINI_PM_RAM_DTCM
+  pd->system->setUpdateCallback(StringIsSet(CommandLine.eeprom_file)
+                                    ? update_first_after_rom_userstack_wrapper
+                                    : update_userstack_wrapper,
+                                pd);
 #else
-		for (int i = 0; i < pm_frames; i++) PokeMini_EmulateFrame();
-#endif
-	}
-#ifdef PD_PERF_DIAG
-	pdperf_emu_us += PDPerf_NowUs() - t0;
-	pdperf_pm_frames += (unsigned int)pm_frames;
-	t0 = PDPerf_NowUs();
+  pd->system->setUpdateCallback(
+      StringIsSet(CommandLine.eeprom_file) ? update_first_after_rom : update,
+      pd);
 #endif
 
-	handle_input();
-#ifdef PD_PERF_DIAG
-	pdperf_input_us += PDPerf_NowUs() - t0;
-	t0 = PDPerf_NowUs();
-#endif
-	render_screen();
-#ifdef PD_PERF_DIAG
-	pdperf_render_us += PDPerf_NowUs() - t0;
-	pdperf_update_us += PDPerf_NowUs() - update_start;
-	pdperf_updates++;
-	if (pdperf_updates >= 30) pdperf_log_and_reset();
-#endif
+  // Suppress the generic RTC sync during reset; apply the Playdate clock
+  // immediately after (the Playdate device has no libc-backed time()).
+  int saved_updatertc = CommandLine.updatertc;
+  CommandLine.updatertc = 0;
+  PokeMini_Reset(0);
+  CommandLine.updatertc = saved_updatertc;
+  PokeMini_ApplyChanges();
+  MinxAudio_ChangeEngine(CommandLine.sound);
+
 #ifdef PD_OPCODE_DIAG
-	static unsigned int opdiag_updates = 0;
-	if (++opdiag_updates >= PD_OPDIAG_LOG_UPDATES) {
-		pdopdiag_log_and_reset(opdiag_updates);
-		opdiag_updates = 0;
-	}
+  MinxCPU_OpcodeDiagReset();
 #endif
 
-	if (fps_visible) pd->system->drawFPS(0, 0);
+  // Repaint the whole framebuffer black so the border around the PM screen
+  // stays black without per-frame redraws (and overwrites the picker UI).
+  uint8_t *fb = pd->graphics->getFrame();
+  memset(fb, 0x00, (size_t)(LCD_ROWSIZE * LCD_ROWS));
+  pd->graphics->markUpdatedRows(0, LCD_ROWS - 1);
 
-	return 1;
+  LCDDirty = 1;
+  app_mode = MODE_EMULATOR;
+  rebuild_system_menu();
+  start_audio_source();
 }
+
+static void return_to_picker(void) {
+  app_mode = MODE_PICKER;
+  rebuild_system_menu();
+  stop_audio_source();
+}
+
+// --- Update -------------------------------------------------------------
 
 // One-shot update callback installed by start_emulation_with_rom() when a ROM
 // has an associated .eep file. Performs the deferred flash I/O and clock sync,
 // then swaps the runtime callback back to update() so the steady-state hot
-// path is byte-for-byte equivalent to the no-EEPROM baseline (no per-frame
-// `if (pending)` check, no BTB slot drift). See NOTES.md "EEPROM via callback
-// swap".
-static int update_first_after_rom(void *userdata)
-{
-	(void)userdata;
-	eeprom_deferred_load_and_sync();
-	pd->system->setUpdateCallback(update, pd);
-	return 1;
+// path is byte-for-byte equivalent to the no-EEPROM baseline. See NOTES.md
+// "EEPROM via callback swap".
+static int update_first_after_rom(void *userdata) {
+  (void)userdata;
+  eeprom_deferred_load_and_sync();
+  pd->system->setUpdateCallback(update, pd);
+  return 1;
 }
 
-#if POKEMINI_PM_RAM_DTCM
-// PROBE: allocate just 256 bytes and write a sentinel pattern. If this
-// works (no crash), DTCM is usable for small allocations even though
-// 8 KB doesn't fit. We won't actually relocate PM_RAM — just verify
-// the DTCM region is accessible for small writes.
-static int pm_ram_dtcm_relocated = 0;
-static void pm_ram_dtcm_relocate_if_needed(void)
-{
-	if (pm_ram_dtcm_relocated) return;
-	pm_ram_dtcm_relocated = 1;
+// Called by the Playdate runtime at 30 fps (target).
+// Pokemon Mini runs natively at ~72 Hz. To keep emulated time matched to real
+// time we need 72/30 = 2.4 PM frames per display frame on average. Use an
+// integer fractional accumulator (numerator 12, denominator 5) to pace this
+// exactly: across every 5 update calls we run 12 PM frames (pattern 2,2,3,2,3).
+static int update(void *userdata) {
+  (void)userdata;
 
-	uint8_t *probe = dtcm_alloc_aligned(256, 32);
-	if (probe) {
-		pd->system->logToConsole(
-		    "DTCM probe: allocated 256 bytes at %p, writing...", probe);
-		for (int i = 0; i < 256; i++) probe[i] = (uint8_t)(i ^ 0xA5);
-		pd->system->logToConsole(
-		    "DTCM probe: write succeeded, first byte = 0x%02x", probe[0]);
-	} else {
-		pd->system->logToConsole("dtcm_alloc failed");
-	}
+  if (app_mode == MODE_PICKER) {
+    rom_picker_update();
+    return 1;
+  }
+
+#ifdef PD_PERF_DIAG
+  unsigned int update_start = PDPerf_NowUs();
+#endif
+
+  static int frame_accum = 0;
+  frame_accum += 12;
+  int pm_frames = frame_accum / 5;
+  frame_accum -= pm_frames * 5;
+
+  // PERF KEEPALIVE (do NOT strip). Two pieces, each load-bearing for a
+  // different firmware mechanism:
+  //
+  // 1. The per-update busy-loop keeps the M7 from idle-downclocking. The
+  //    Playdate firmware appears to ramp the core clock down when an app
+  //    looks idle to it; any sustained per-update work prevents that.
+  //    Confirmed 2026-05-31 by A/B test: replacing 4× getElapsedTime()
+  //    syscalls with a tight volatile NOP loop gave identical on-device
+  //    throughput. Either pattern works — the busy-loop is just cleaner
+  //    and avoids the syscall ritual. 2000 iterations ≈ a few microseconds.
+  //    `volatile` on the counter is required so -Os doesn't elide it.
+  //
+  // 2. The once-per-second format-rich logToConsole below keeps something
+  //    else warm (likely a USB serial / scheduler tick). Without it,
+  //    fps caps around 12-14 even with the busy-loop running. Constant-
+  //    string logs don't help; only format-rich (%f / %.1f / etc.) does.
+  //
+  // See NOTES.md "Perf-keepalive minimal recipe" and "Keepalive mechanism
+  // confirmed (2026-05-31)" for the full bisection history.
+  {
+    volatile unsigned int spin = 2000;
+    while (spin--) {
+      __asm__ volatile("nop");
+    }
+
+    static int keepalive_count = 0;
+    static int keepalive_total = 0;
+    static unsigned int keepalive_t0 = 0;
+    keepalive_total++;
+    if (++keepalive_count >= 30) {
+      keepalive_count = 0;
+      unsigned int now = pd->system->getCurrentTimeMilliseconds();
+      unsigned int dt = (keepalive_t0 == 0) ? 0 : now - keepalive_t0;
+      keepalive_t0 = now;
+      static float keepalive_f = 1.5f;
+      keepalive_f *= 1.0001f;
+      if (keepalive_f > 1.0e9f)
+        keepalive_f = 1.5f;
+      pd->system->logToConsole("perf: total=%d dt=%ums (rate=%.1ffps) f=%.3f",
+                               keepalive_total, dt,
+                               dt > 0 ? 30000.0f / dt : 0.0f, keepalive_f);
+    }
+  }
+
+#ifdef PD_PERF_DIAG
+  unsigned int t0 = PDPerf_NowUs();
+#endif
+  {
+#if POKEMINI_ITCM_CALLBACKS
+    // ITCM hot-callback copy: memcpy the .itcm_pm region (containing
+    // MinxCPU_ITCMRead/Write) to a stack buffer (which lives in DTCM
+    // on the Playdate's Cortex-M7), repoint the g_pm_read/write
+    // function pointers at the stack copies, run emulation, restore.
+    // Pattern from Beetle VB / Red Viper. See NOTES.md
+    // "ITCM hot-callback copy".
+    extern uint8_t __itcm_pm_start[];
+    extern uint8_t __itcm_pm_end[];
+    extern uint8_t (*g_pm_read)(int, uint32_t);
+    extern void (*g_pm_write)(int, uint32_t, uint8_t);
+    extern uint8_t MinxCPU_ITCMRead(int, uint32_t);
+    extern void MinxCPU_ITCMWrite(int, uint32_t, uint8_t);
+
+    uintptr_t itcm_size = (uintptr_t)(__itcm_pm_end - __itcm_pm_start);
+    uint8_t stk_buf[1024] __attribute__((aligned(32)));
+    if (itcm_size <= sizeof(stk_buf)) {
+      __builtin_memcpy(stk_buf, __itcm_pm_start, itcm_size);
+      __asm__ volatile("dsb sy" ::: "memory");
+      __asm__ volatile("isb sy" ::: "memory");
+
+      uintptr_t read_off =
+          (uintptr_t)MinxCPU_ITCMRead - (uintptr_t)__itcm_pm_start;
+      uintptr_t write_off =
+          (uintptr_t)MinxCPU_ITCMWrite - (uintptr_t)__itcm_pm_start;
+      uint8_t (*saved_read)(int, uint32_t) = g_pm_read;
+      void (*saved_write)(int, uint32_t, uint8_t) = g_pm_write;
+      g_pm_read =
+          (uint8_t (*)(int, uint32_t))(((uintptr_t)stk_buf + read_off) | 1);
+      g_pm_write = (void (*)(int, uint32_t, uint8_t))(
+          ((uintptr_t)stk_buf + write_off) | 1);
+
+      for (int i = 0; i < pm_frames; i++)
+        PokeMini_EmulateFrame();
+
+      g_pm_read = saved_read;
+      g_pm_write = saved_write;
+    } else {
+      // Section grew beyond stk_buf budget — fall through, run with
+      // original (non-relocated) callbacks. Log once so we notice.
+      static int itcm_overflow_logged = 0;
+      if (!itcm_overflow_logged) {
+        pd->system->logToConsole("ITCM section is %u bytes, exceeds stk_buf "
+                                 "%u; running non-relocated",
+                                 (unsigned)itcm_size,
+                                 (unsigned)sizeof(stk_buf));
+        itcm_overflow_logged = 1;
+      }
+      for (int i = 0; i < pm_frames; i++)
+        PokeMini_EmulateFrame();
+    }
+#else
+    for (int i = 0; i < pm_frames; i++)
+      PokeMini_EmulateFrame();
+#endif
+  }
+#ifdef PD_PERF_DIAG
+  pdperf_emu_us += PDPerf_NowUs() - t0;
+  pdperf_pm_frames += (unsigned int)pm_frames;
+  t0 = PDPerf_NowUs();
+#endif
+
+  handle_input();
+#ifdef PD_PERF_DIAG
+  pdperf_input_us += PDPerf_NowUs() - t0;
+  t0 = PDPerf_NowUs();
+#endif
+  render_screen();
+#ifdef PD_PERF_DIAG
+  pdperf_render_us += PDPerf_NowUs() - t0;
+  pdperf_update_us += PDPerf_NowUs() - update_start;
+  pdperf_updates++;
+  if (pdperf_updates >= 30)
+    pdperf_log_and_reset();
+#endif
+#ifdef PD_OPCODE_DIAG
+  static unsigned int opdiag_updates = 0;
+  if (++opdiag_updates >= PD_OPDIAG_LOG_UPDATES) {
+    pdopdiag_log_and_reset(opdiag_updates);
+    opdiag_updates = 0;
+  }
+#endif
+
+  if (fps_visible)
+    pd->system->drawFPS(0, 0);
+
+  return 1;
+}
+
+// --- DTCM / user-stack wrappers -----------------------------------------
+
+#if POKEMINI_PM_RAM_DTCM
+static int pm_ram_dtcm_relocated = 0;
+static void pm_ram_dtcm_relocate_if_needed(void) {
+  if (pm_ram_dtcm_relocated)
+    return;
+  pm_ram_dtcm_relocated = 1;
+
+  uint8_t *probe = dtcm_alloc_aligned(256, 32);
+  if (probe) {
+    pd->system->logToConsole(
+        "DTCM probe: allocated 256 bytes at %p, writing...", probe);
+    for (int i = 0; i < 256; i++)
+      probe[i] = (uint8_t)(i ^ 0xA5);
+    pd->system->logToConsole("DTCM probe: write succeeded, first byte = 0x%02x",
+                             probe[0]);
+  } else {
+    pd->system->logToConsole("dtcm_alloc failed");
+  }
 }
 
 // Thin wrappers that bounce update() through call_with_user_stack_1 so
 // the actual emulation runs on user_stack (SDRAM) instead of the
 // firmware's DTCM stack. See PokeMini_UserStack.h.
-static int update_userstack_wrapper(void *userdata)
-{
-	// MINIMAL TRIVIAL WRAPPER: no DTCM activity, no user_stack, no probe.
-	// Just call update. If this still crashes when registered as callback,
-	// the issue is firmware-side and out of our control.
-	return update(userdata);
+static int update_userstack_wrapper(void *userdata) {
+  // MINIMAL TRIVIAL WRAPPER: no DTCM activity, no user_stack, no probe.
+  // Just call update. If this still crashes when registered as callback,
+  // the issue is firmware-side and out of our control.
+  return update(userdata);
 }
 
-static int update_first_after_rom_userstack_wrapper(void *userdata)
-{
-	return update_first_after_rom(userdata);
+static int update_first_after_rom_userstack_wrapper(void *userdata) {
+  return update_first_after_rom(userdata);
 }
 #endif
+
+// --- Event handler ------------------------------------------------------
 
 #ifdef _WINDLL
 __declspec(dllexport)
 #endif
-int eventHandler(PlaydateAPI *playdate, PDSystemEvent event, uint32_t arg)
-{
-	(void)arg;
+int eventHandler(PlaydateAPI *playdate, PDSystemEvent event, uint32_t arg) {
+  (void)arg;
 
-	if (event == kEventInit) {
-		pd = playdate;
+  if (event == kEventInit) {
+    pd = playdate;
 
 #if POKEMINI_PM_RAM_DTCM
-		// Initialize the user-stack canaries; the actual switching is done
-		// inside the update_userstack_wrapper callbacks (see top of file).
-		init_user_stack();
+    // Initialize the user-stack canaries; the actual switching is done
+    // inside the update_userstack_wrapper callbacks.
+    init_user_stack();
 
-		// DTCM allocator: compute the boundary based on the current frame
-		// pointer. We DO NOT write to DTCM yet — kEventInit is firmware-
-		// boot-heavy and the firmware actively uses our target DTCM addresses
-		// during this window. The actual PM_RAM relocation is deferred to
-		// the first update() call (which runs on user_stack, well past
-		// firmware boot). See pm_ram_dtcm_relocate_if_needed() below.
-		dtcm_init(__builtin_frame_address(0));
-		pd->system->logToConsole(
-		    "DTCM mempool initialized at %p", dtcm_get_mempool());
+    // DTCM allocator: compute the boundary based on the current frame
+    // pointer. We DO NOT write to DTCM yet — kEventInit is firmware-
+    // boot-heavy and the firmware actively uses our target DTCM addresses
+    // during this window. The actual PM_RAM relocation is deferred to
+    // the first update() call. See pm_ram_dtcm_relocate_if_needed().
+    dtcm_init(__builtin_frame_address(0));
+    pd->system->logToConsole("DTCM mempool initialized at %p",
+                             dtcm_get_mempool());
 #endif
 
-		// 30 fps display rate; we emulate 2 PM frames per call
-		pd->display->setRefreshRate(30);
+    pd->display->setRefreshRate(30);
 
-		// Accelerometer powers the PM "Shake" input. Off by default to save
-		// battery; enabling adds a small idle draw but it's the only way
-		// getAccelerometer returns useful data.
-		pd->system->setPeripheralsEnabled(kAccelerometer);
+    // Accelerometer powers the PM "Shake" input. Off by default to save
+    // battery; enabling adds a small idle draw.
+    pd->system->setPeripheralsEnabled(kAccelerometer);
 
-		init_expand_lut();
+    init_expand_lut();
 
-		// Configure emulator defaults suitable for Playdate
-		CommandLineInit();
-		CommandLine.sound      = 1;
-		CommandLine.lcdfilter  = 0;
-		// LCDMODE_2SHADES is the default for best performance — the analog
-		// decay path (LCDMODE_ANALOG) is available via the system menu's
-		// "LCD Mode: Soft" option and trades fps for grey-shade smoothing.
-		// See render_screen for the threshold logic both modes share.
-		CommandLine.lcdmode    = LCDMODE_2SHADES;
-		// MinxPRC_Sync increments PRCCnt by MINX_PRCTIMERINC (= 19622) cycles
-		// per call. Its state machine triggers BG&SPR-render and Copy-to-LCD
-		// on 0x01000000-wide PRCCnt windows. To never skip a window in a
-		// single MinxPRC_Sync call:
-		//   synccycles * 19622  <  0x01000000 (= 16,777,216)
-		//   synccycles          <  854
-		// 800 leaves margin for the while-loop overshoot. Past ~854 the PRC
-		// frame triggers can be skipped (LCDPixelsA stays blank → white screen),
-		// which is why 1024/2048 previously broke. See NOTES.md "synccycles
-		// ceiling: PRCCnt window skipping".
-		CommandLine.synccycles = 800;
+    CommandLineInit();
+    CommandLine.sound = 1;
+    CommandLine.lcdfilter = 0;
+    // LCDMODE_2SHADES is the default for best performance — the analog
+    // decay path (LCDMODE_ANALOG) is available via the system menu's
+    // "LCD Mode: Soft" option and trades fps for grey-shade smoothing.
+    CommandLine.lcdmode = LCDMODE_2SHADES;
+    // MinxPRC_Sync increments PRCCnt by MINX_PRCTIMERINC (= 19622) cycles
+    // per call. Its state machine triggers BG&SPR-render and Copy-to-LCD
+    // on 0x01000000-wide PRCCnt windows. To never skip a window in a
+    // single MinxPRC_Sync call:
+    //   synccycles * 19622  <  0x01000000 (= 16,777,216)
+    //   synccycles          <  854
+    // 800 leaves margin for the while-loop overshoot. Past ~854 the PRC
+    // frame triggers can be skipped (LCDPixelsA stays blank → white screen).
+    // See NOTES.md "synccycles ceiling: PRCCnt window skipping".
+    CommandLine.synccycles = 800;
 
-		// Apply persisted user settings (LCD mode, scale, FPS overlay) on top
-		// of the compiled-in defaults so the menu indicators come up matching
-		// the saved state on next launch. Must run before PokeMini_SetVideo
-		// (which reads CommandLine.lcdmode) and before rebuild_system_menu.
-		load_settings();
+    // Apply persisted user settings on top of the compiled-in defaults so
+    // the menu indicators come up matching the saved state on next launch.
+    // Must run before PokeMini_SetVideo (reads CommandLine.lcdmode) and
+    // before rebuild_system_menu.
+    load_settings();
 
-		JoystickSetup("Playdate", 0, 30000, PD_KeysNames, 7, PD_KeysMapping);
+    JoystickSetup("Playdate", 0, 30000, PD_KeysNames, 7, PD_KeysMapping);
 
-		// 1x video spec (96x64 output), 16bpp, no LCD filter, 2-shade mode
-		if (!PokeMini_SetVideo((TPokeMini_VideoSpec *)&PokeMini_Video1x1, 16,
-		                       CommandLine.lcdfilter, CommandLine.lcdmode)) {
-			pd->system->error("PokeMini_SetVideo failed");
-			return 1;
-		}
+    if (!PokeMini_SetVideo((TPokeMini_VideoSpec *)&PokeMini_Video1x1, 16,
+                           CommandLine.lcdfilter, CommandLine.lcdmode)) {
+      pd->system->error("PokeMini_SetVideo failed");
+      return 1;
+    }
 
-		// POKEMINI_GENSOUND: synthesizes audio from CPU state without a FIFO,
-		// safe to call from the separate Playdate audio thread
-		if (!PokeMini_Create(POKEMINI_GENSOUND, 0)) {
-			pd->system->error("PokeMini_Create failed");
-			return 1;
-		}
+    // POKEMINI_GENSOUND: synthesizes audio from CPU state without a FIFO,
+    // safe to call from the separate Playdate audio thread.
+    if (!PokeMini_Create(POKEMINI_GENSOUND, 0)) {
+      pd->system->error("PokeMini_Create failed");
+      return 1;
+    }
 
-		PokeMini_LoadFreeBIOS();
-		PokeMini_UseDefaultCallbacks();
+    PokeMini_LoadFreeBIOS();
+    PokeMini_UseDefaultCallbacks();
 
-		// Wire in the Playdate-native EEPROM callbacks so saves work on
-		// device (fopen silently fails there; pd->file->* is the right path).
-		PokeMini_CustomSaveEEPROM = pd_save_eeprom;
-		PokeMini_CustomLoadEEPROM = pd_load_eeprom;
+    // Wire in the Playdate-native EEPROM callbacks (fopen silently fails
+    // on device; pd->file->* is the right path).
+    PokeMini_CustomSaveEEPROM = pd_save_eeprom;
+    PokeMini_CustomLoadEEPROM = pd_load_eeprom;
 
-		// Clear the CommandLineInit default ("PokeMini.eep") so no accidental
-		// save goes to the wrong filename before a ROM is selected.
-		CommandLine.eeprom_file[0] = 0;
+    // Clear the CommandLineInit default ("PokeMini.eep") so no accidental
+    // save goes to the wrong filename before a ROM is selected.
+    CommandLine.eeprom_file[0] = 0;
 
-		UIMenu_Init();
+    UIMenu_Init();
 
-		// The audio source is started when a ROM starts, not while the picker
-		// is up. Creating it at the emulation transition avoids occasional
-		// silent-source behavior observed on device after layout-only rebuilds.
+    // At startup app_mode == MODE_PICKER, so this installs the picker
+    // variant of the menu (FPS toggle + LCD Mode + Scale).
+    rebuild_system_menu();
 
-		// At startup app_mode == MODE_PICKER, so this installs the picker
-		// variant of the menu (FPS toggle + LCD Mode + Scale). When a ROM
-		// is launched start_emulation_with_rom() rebuilds the menu to the
-		// emulator variant (ROM Picker + LCD Mode + Scale).
-		rebuild_system_menu();
+    // Initialise the shared ROM picker library. It scans ROM_DIR, filters
+    // by extension, sorts, and draws its own UI. on_select fires when the
+    // player presses A on a valid file (or immediately if only one ROM
+    // exists and auto_load_single is set).
+    static const char *picker_exts[] = {"min", NULL};
+    RomPickerConfig picker_cfg = {
+        .folder = ROM_DIR,
+        .extensions = picker_exts,
+        .on_select = rom_selected_cb,
+        .userdata = NULL,
+        .auto_load_single = 1,
+    };
+    rom_picker_init(pd, &picker_cfg);
 
-		// Initialise the shared ROM picker library. It scans ROM_DIR, filters
-		// by extension, sorts, and draws its own UI. on_select fires when the
-		// player presses A on a valid file (or immediately if only one ROM
-		// exists and auto_load_single is set). The library creates ROM_DIR
-		// (and all parent segments) if it doesn't exist.
-		static const char *picker_exts[] = { "min", NULL };
-		RomPickerConfig picker_cfg = {
-			.folder           = ROM_DIR,
-			.extensions       = picker_exts,
-			.on_select        = rom_selected_cb,
-			.userdata         = NULL,
-			.auto_load_single = 1,
-		};
-		rom_picker_init(pd, &picker_cfg);
-
-		app_mode = MODE_PICKER;
+    app_mode = MODE_PICKER;
 #if POKEMINI_PM_RAM_DTCM
-		pd->system->setUpdateCallback(update_userstack_wrapper, pd);
+    pd->system->setUpdateCallback(update_userstack_wrapper, pd);
 #else
-		pd->system->setUpdateCallback(update, pd);
+    pd->system->setUpdateCallback(update, pd);
 #endif
 
-	} else if (event == kEventPause) {
-		emu_paused = 1;
-		// Release every PM key so no button stays stuck when the player returns.
-		// The Playdate runtime stops calling update() while the menu is up, so
-		// held-button state from handle_input() would otherwise persist forever.
-		for (int k = MINX_KEY_A; k <= MINX_KEY_SHOCK; k++)
-			PokeMini_KeypadEvent((uint8_t)k, 0);
+  } else if (event == kEventPause) {
+    emu_paused = 1;
+    // Release every PM key so no button stays stuck when the player returns.
+    // The Playdate runtime stops calling update() while the menu is up, so
+    // held-button state from handle_input() would otherwise persist forever.
+    for (int k = MINX_KEY_A; k <= MINX_KEY_SHOCK; k++)
+      PokeMini_KeypadEvent((uint8_t)k, 0);
 
-	} else if (event == kEventResume) {
-		emu_paused = 0;
-		if (app_mode == MODE_EMULATOR)
-			pd->sound->setOutputsActive(1, 1);
+  } else if (event == kEventResume) {
+    emu_paused = 0;
+    if (app_mode == MODE_EMULATOR)
+      pd->sound->setOutputsActive(1, 1);
 
-	} else if (event == kEventTerminate) {
-		if (audio_source) {
-			pd->sound->removeSource(audio_source);
-			audio_source = NULL;
-		}
+  } else if (event == kEventTerminate) {
+    if (audio_source) {
+      pd->sound->removeSource(audio_source);
+      audio_source = NULL;
+    }
 
-		UIMenu_Destroy();
+    UIMenu_Destroy();
 
-		// Attempt EEPROM save; works on simulator, silently skipped on device
-		// (fopen is unsupported on hardware - add PokeMini_CustomSaveEEPROM for
-		// a full device implementation using pd->file->* APIs)
-		PokeMini_SaveFromCommandLines(1);
+    PokeMini_SaveFromCommandLines(1);
+    PokeMini_Destroy();
 
-		PokeMini_Destroy();
+    if (rom_buf) {
+      free(rom_buf);
+      rom_buf = NULL;
+    }
+  }
 
-		if (rom_buf) {
-			free(rom_buf);
-			rom_buf = NULL;
-		}
-
-		// pd->graphics->freeFont exists in the SDK but the Playdate runtime
-		// reclaims everything on app exit — leaving the font handle is fine.
-	}
-
-	return 0;
+  return 0;
 }
