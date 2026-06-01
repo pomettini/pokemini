@@ -35,10 +35,11 @@ In-game saves (the cartridge's EEPROM) are written to `/Shared/Emulation/pm/save
 
 ## Options (found in Playdate system menu)
 
-- **LCD Mode**: `Soft` (default) smooths the greys, to mimic the
-  original screen. `Fast` is slightly faster (duh!) but greys will flicker.
-- **Scale**: `3x` (default) is pixel-perfect with a black border. `3.75x`
-  fills the screen vertically but stretches.
+- **LCD Mode**: `Fast` (default) is the best-performing mode but greys
+  will flicker. `Soft` smooths the greys to mimic the original screen at a
+  small fps cost.
+- **Scale**: `3.75x` (default) fills the screen vertically but stretches.
+  `3x` is pixel-perfect with a black border.
 
 ## Credits
 

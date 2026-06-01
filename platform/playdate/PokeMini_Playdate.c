@@ -242,7 +242,7 @@ static PDMenuItem *lcd_mode_menu_item = NULL;
 static const char *lcd_mode_options[] = { "Soft", "Fast" };
 static PDMenuItem *screen_scale_menu_item = NULL;
 static const char *screen_scale_options[] = { "3x", "3.75x" };
-static int screen_scale_mode = RENDER_SCALE_3X;
+static int screen_scale_mode = RENDER_SCALE_375X;
 
 // C is held while the crank sits in this undocked angle zone. This avoids
 // using the dock/undock mechanism itself as a gameplay button.
@@ -1240,11 +1240,11 @@ int eventHandler(PlaydateAPI *playdate, PDSystemEvent event, uint32_t arg)
 		CommandLineInit();
 		CommandLine.sound      = 1;
 		CommandLine.lcdfilter  = 0;
-		// LCDMODE_ANALOG so MinxLCD_DecayRefresh writes a 4-frame smoothed
-		// brightness into LCDPixelsA (Hardware.c:335). render_screen thresholds
-		// that to suppress flicker and give moving "gray" sprites a soft fade
-		// instead of dither smear. See render_screen for the threshold logic.
-		CommandLine.lcdmode    = LCDMODE_ANALOG;
+		// LCDMODE_2SHADES is the default for best performance — the analog
+		// decay path (LCDMODE_ANALOG) is available via the system menu's
+		// "LCD Mode: Soft" option and trades fps for grey-shade smoothing.
+		// See render_screen for the threshold logic both modes share.
+		CommandLine.lcdmode    = LCDMODE_2SHADES;
 		// MinxPRC_Sync increments PRCCnt by MINX_PRCTIMERINC (= 19622) cycles
 		// per call. Its state machine triggers BG&SPR-render and Copy-to-LCD
 		// on 0x01000000-wide PRCCnt windows. To never skip a window in a
@@ -1307,15 +1307,15 @@ int eventHandler(PlaydateAPI *playdate, PDSystemEvent event, uint32_t arg)
 		lcd_mode_menu_item = pd->system->addOptionsMenuItem(
 			"LCD Mode", lcd_mode_options, 2, menu_item_lcd_mode_cb, NULL);
 		if (lcd_mode_menu_item) {
-			// Soft is the default: analog decay suppresses Pokemon Mini LCD
-			// flicker. Fast is available for performance measurements.
-			pd->system->setMenuItemValue(lcd_mode_menu_item, 0);
+			// Fast (LCDMODE_2SHADES) is the default for best performance.
+			// Soft enables analog decay for smoother greys at a fps cost.
+			pd->system->setMenuItemValue(lcd_mode_menu_item, 1);
 		}
 		screen_scale_menu_item = pd->system->addOptionsMenuItem(
 			"Scale", screen_scale_options, 2, menu_item_screen_scale_cb, NULL);
 		if (screen_scale_menu_item) {
-			// 3x is the default stable integer-scale mode.
-			pd->system->setMenuItemValue(screen_scale_menu_item, 0);
+			// 3.75x is the default — fills the screen vertically.
+			pd->system->setMenuItemValue(screen_scale_menu_item, 1);
 		}
 
 		// Scan /Shared/Emulation/pm/games/ for *.min ROMs.
