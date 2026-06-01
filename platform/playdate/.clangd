@@ -1,0 +1,13 @@
+CompileFlags:
+  Add:
+    - -I/Users/pomettini/Developer/PlaydateSDK/C_API
+    - -I../../source
+    - -I../../resource
+    - -I../../freebios
+    - -Ilibs/pd-rom-picker/src
+    - -DTARGET_EXTENSION
+    - -DNO_DIRS
+    - -DNO_ZIP
+    - -DPERFORMANCE
+    - -DNO_SCANDIRS
+    - -DSIMPLE_CONTROLS
