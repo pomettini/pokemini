@@ -4,4 +4,4 @@ description=A Pokemon Mini emulator
 bundleID=com.pomettini.pokemini
 version=0.2.0
 buildNumber=4
-imagePath=
+imagePath=SystemAssets/
