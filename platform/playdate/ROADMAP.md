@@ -1,4 +1,4 @@
-# PokeMini Playdate — Path to Shippable
+# PlayMini Playdate — Path to Shippable
 
 What's between the current "works on my device" state and a release that
 others would actually use. Roughly ordered by ship-blocker → polish.

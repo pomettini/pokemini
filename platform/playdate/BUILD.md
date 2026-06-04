@@ -1,4 +1,4 @@
-# Building PokeMini for Playdate
+# Building PlayMini for Playdate
 
 ## Prerequisites
 

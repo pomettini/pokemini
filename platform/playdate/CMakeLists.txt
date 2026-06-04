@@ -25,6 +25,9 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Debug)
 endif()
 
+# Keep the legacy target/package filename so existing build and release
+# workflows continue to produce PokeMini.pdx. The launcher name and update
+# identity come from Source/pdxinfo.
 set(PLAYDATE_GAME_NAME PokeMini)
 # Device build also produces PokeMini.pdx (no _DEVICE suffix). The two cmake
 # branches (sim/device) are mutually exclusive per build dir, so reusing the

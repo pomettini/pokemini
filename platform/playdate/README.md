@@ -1,4 +1,4 @@
-# PokeMini for Playdate
+# PlayMini for Playdate
 
 A port of JustBurn's [PokéMini emulator](https://sourceforge.net/projects/pokemini/)
 to the Panic® [Playdate®](https://play.date/). Plays
@@ -57,7 +57,7 @@ Source code, roadmap and dev notes:
 
 ## Legal
 
-PokeMini for Playdate is a fan project. It is **not affiliated with,
+PlayMini for Playdate is a fan project. It is **not affiliated with,
 endorsed by, or sponsored by Nintendo® Co., Ltd., Game Freak® Inc.,
 or The Pokémon Company®.** Pokémon® and Pokémon® Mini are trademarks
 of Nintendo, Game Freak, and The Pokémon Company; all rights belong

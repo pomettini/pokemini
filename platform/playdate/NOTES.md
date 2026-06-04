@@ -1,4 +1,4 @@
-# PokeMini Playdate Port — Development Notes
+# PlayMini Playdate Port — Development Notes
 
 Living document of bugs found, fixes applied, and gotchas learned while porting
 the PokeMini emulator to the Playdate. Update this whenever something
