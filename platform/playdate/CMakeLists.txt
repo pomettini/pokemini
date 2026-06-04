@@ -102,6 +102,7 @@ target_include_directories(${TARGET_NAME} PRIVATE
     ${POKEMINI_ROOT}/resource
     ${POKEMINI_ROOT}/freebios
     ${CMAKE_CURRENT_SOURCE_DIR}/libs/pd-rom-picker/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/libs/pdll
 )
 
 target_compile_definitions(${TARGET_NAME} PRIVATE
