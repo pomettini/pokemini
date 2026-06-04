@@ -4,6 +4,81 @@ Living document of bugs found, fixes applied, and gotchas learned while porting
 the PokeMini emulator to the Playdate. Update this whenever something
 non-obvious is discovered. Newest entries on top.
 
+## PDLL integration performance evaluation (2026-06-04)
+
+Evaluated whether adding the PDLL export shim caused a performance
+regression. The comparison used the last pre-PDLL commit
+(`35f75c2`, "Update pd-rom-picker submodule") and the PDLL integration
+commit (`096376a`, "Added pdll").
+
+### Static release-build comparison
+
+| Build | `.text` | `.data` | `.bss` | Total | `pdex.bin` |
+|---|---:|---:|---:|---:|---:|
+| Pre-PDLL | 117774 | 3760 | 150156 | 271690 | 76203 |
+| PDLL | 117870 | 3760 | 150156 | 271786 | 76300 |
+| Delta | +96 | 0 | 0 | +96 | +97 |
+
+The added 96 bytes consist of the PDLL symbol lookup/export machinery,
+the slightly larger lifecycle event handler, and alignment padding.
+
+There is no new per-frame PDLL work:
+
+- `PDLL_EVENT` is called only from `eventHandler`, for lifecycle events.
+- The steady-state `update()` object section is byte-for-byte identical.
+- All important emulation hot functions retain the same code addresses
+  and sizes, including `MinxCPU_Exec`, `MinxCPU_ExecCE`,
+  `MinxCPU_ExecCF`, `MinxTimers_Sync`, `MinxPRC_Sync`,
+  `PokeMini_EmulateFrame`, and `update`.
+- The pinned I-cache and branch-predictor layout is therefore preserved.
+
+The extra `.text` does move all mutable data by `+0x60`. For example,
+`PM_RAM`, `MinxCPU`, `MinxTimers`, `MinxPRC`, and `LCDPixelsAS` all move
+by 96 bytes. This is a plausible D-cache-layout perturbation on this
+port, where prior `.bss` shifts have measurably changed performance.
+It therefore needed an on-device A/B despite the identical hot code.
+
+### Controlled on-device A/B
+
+Tested on the user's Rev A Playdate with **Pokemon Race Mini (Japan)**.
+Temporary benchmark builds auto-loaded the same ROM, warmed up for 30
+updates, then measured the elapsed wall time for the next 300 updates.
+The harness was identical between builds and reported the result after
+the measured interval. No benchmark instrumentation was retained in the
+repository.
+
+| Build | Run 1 | Run 2 | Run 3 | Average |
+|---|---:|---:|---:|---:|
+| Pre-PDLL | 14812 ms | 14805 ms | 14810 ms | **14809 ms** |
+| PDLL | 14729 ms | 14739 ms | 14740 ms | **14736 ms** |
+
+The pre-PDLL measurements had only a 7 ms spread, so the test was highly
+repeatable. The PDLL build completed the interval 73 ms faster on average,
+approximately **0.49% faster**.
+
+### Conclusion and scope
+
+**No PDLL-enabled performance regression was detected.** The measured
+result is slightly faster, but it should not be interpreted as PDLL
+improving execution speed: PDLL adds no steady-state work, so the small
+difference is most likely the result of the `+0x60` mutable-data layout
+shift changing D-cache behavior favorably for this workload.
+
+This test covered the standalone Playdate execution path. It did not
+measure loading PokeMini as an active CrankBoy core because the current
+integration exports the Playdate `eventHandler`, not CrankBoy's core ABI.
+PDLL decompression, relocation, and symbol lookup would be one-time load
+costs rather than per-frame costs. CrankBoy's active-core loader uses
+64 KB alignment, which preserves the binary's low 16 address bits and
+therefore preserves the deliberately pinned hot-code cache layout.
+
+Future changes to the PDLL shim should repeat the Race Mini A/B if they:
+
+- add any work reachable from `update()`;
+- move the pinned hot functions; or
+- change `.text` enough to shift mutable data into a different D-cache
+  layout.
+
 ## DTCM / ITCM negative results, full exploration (2026-05-31)
 
 Inspired by CrankBoy's documented DTCM/ITCM benefits, we did a thorough

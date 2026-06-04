@@ -29,6 +29,7 @@
 #include "PokeMini.h"
 #include "UI.h"
 #include "Video_x1.h"
+#include "pdll.h"
 #include "rom_picker.h"
 
 #include "PokeMini_DTCM.h"
@@ -1121,8 +1122,15 @@ static int update_first_after_rom_userstack_wrapper(void *userdata) {
 #ifdef _WINDLL
 __declspec(dllexport)
 #endif
+int eventHandler(PlaydateAPI *playdate, PDSystemEvent event, uint32_t arg);
+
+PDLL_EXPORT(eventHandler)
+
+#ifdef _WINDLL
+__declspec(dllexport)
+#endif
 int eventHandler(PlaydateAPI *playdate, PDSystemEvent event, uint32_t arg) {
-  (void)arg;
+  PDLL_EVENT(playdate, event, arg);
 
   if (event == kEventInit) {
     pd = playdate;

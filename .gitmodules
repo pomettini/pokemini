@@ -1,3 +1,6 @@
 [submodule "platform/playdate/libs/pd-rom-picker"]
 	path = platform/playdate/libs/pd-rom-picker
 	url = https://github.com/pomettini/pd-rom-picker
+[submodule "platform/playdate/libs/pdll"]
+	path = platform/playdate/libs/pdll
+	url = https://github.com/CrankBoyHQ/pdll.git
