@@ -21,19 +21,23 @@ action games can run a few fps below native speed.</p>
 <h2>Install</h2>
 
 <ol>
-  <li>Download <code>PokeMini.pdx</code> from this page.</li>
+  <li>Download <code>PlayMini.pdx</code> from this page.</li>
   <li>Sideload via <a href="https://play.date/account/sideload/">play.date/account</a>.</li>
 </ol>
 
 <h2>Adding ROMs</h2>
 
-<p>Drop <code>.min</code> files into <code>/Shared/Emulation/pm/games/</code> on your Playdate. The folder is created on first launch.</p>
-
-<p>Return to the picker mid-game from Playdate's system menu.</p>
+<ol>
+  <li>Launch PlayMini once. If you have no ROMs yet, you'll see a message with the folder path. The folder has been created.</li>
+  <li>Connect your Playdate to your computer via USB.</li>
+  <li>On the Playdate, go to <strong>Settings → System → Reboot into Data Disk Mode</strong>. The device mounts as a USB drive on your computer.</li>
+  <li>Copy your <code>.min</code> ROM files into the <code>Games/Shared/Emulation/pm/games/</code> folder on the mounted drive.</li>
+  <li>Eject the drive and reboot the Playdate.</li>
+</ol>
 
 <h2>Saves</h2>
 
-<p>In-game saves (the cartridge's EEPROM) are written to <code>/Shared/Emulation/pm/saves/&lt;rom_name&gt;.eep</code> when you switch ROMs or quit the app. Saves persist across restarts and survive sideloading a new build.</p>
+<p>Your progress is saved automatically when you switch games or quit the app. Save files are stored in <code>Games/Shared/Emulation/pm/saves/</code> on your Playdate.</p>
 
 <h2>Controls</h2>
 
@@ -45,7 +49,7 @@ action games can run a few fps below native speed.</p>
     <tr><td>D-pad</td><td>D-pad</td></tr>
     <tr><td>A</td><td>A</td></tr>
     <tr><td>B</td><td>B</td></tr>
-    <tr><td>Crank, in 60°-180°</td><td>C</td></tr>
+    <tr><td>Crank pointing down</td><td>C</td></tr>
     <tr><td>Shake the device</td><td>Shake</td></tr>
   </tbody>
 </table>

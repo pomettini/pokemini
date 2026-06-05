@@ -10,18 +10,20 @@ action games can run a few fps below native speed.
 
 ## Install
 
-1. Download `PokeMini.pdx` from this page.
+1. Download `PlayMini.pdx` from this page.
 2. Sideload via [play.date/account](https://play.date/account/sideload/).
 
 ## Adding ROMs
 
-Drop `.min` files into `/Shared/Emulation/pm/games/` on your Playdate. The folder is created on first launch.
-
-Return to the picker mid-game from Playdate's system menu.
+1. Launch PlayMini once. If you have no ROMs yet, you'll see a message with the folder path. The folder has been created.
+2. Connect your Playdate to your computer via USB.
+3. On the Playdate, go to **Settings → System → Reboot into Data Disk Mode**. The device mounts as a USB drive on your computer.
+4. Copy your `.min` ROM files into the `Games/Shared/Emulation/pm/games/` folder on the mounted drive.
+5. Eject the drive and reboot the Playdate.
 
 ## Saves
 
-In-game saves (the cartridge's EEPROM) are written to `/Shared/Emulation/pm/saves/<rom_name>.eep` when you switch ROMs or quit the app. Saves persist across restarts and survive sideloading a new build.
+Your progress is saved automatically when you switch games or quit the app. Save files are stored in `Games/Shared/Emulation/pm/saves/` on your Playdate.
 
 ## Controls
 
@@ -30,7 +32,7 @@ In-game saves (the cartridge's EEPROM) are written to `/Shared/Emulation/pm/save
 | D-pad                 | D-pad        |
 | A                     | A            |
 | B                     | B            |
-| Crank, in 60°-180°    | C            |
+| Crank pointing down   | C            |
 | Shake the device      | Shake        |
 
 ## Options (found in Playdate system menu)
@@ -69,3 +71,4 @@ This Playdate port was developed with assistance from generative AI,
 specifically [Claude Code](https://claude.com/claude-code). Use of
 generative AI in the upstream PokeMini emulator has not been
 disclosed.
+
