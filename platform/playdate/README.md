@@ -35,11 +35,10 @@ In-game saves (the cartridge's EEPROM) are written to `/Shared/Emulation/pm/save
 
 ## Options (found in Playdate system menu)
 
-- **LCD Mode**: `Fast` (default) is the best-performing mode but greys
-  will flicker. `Soft` smooths the greys to mimic the original screen at a
-  small fps cost.
-- **Scale**: `3.75x` (default) fills the screen vertically but stretches.
-  `3x` is pixel-perfect with a black border.
+- **LCD Mode**: `Fast` (default) is slightly faster (duh!) but greys will flicker. `Soft` smooths the greys, to mimic the
+  original screen.
+- **Scale**: `3x` (default) is pixel-perfect with a black border. `3.75x`
+  fills the screen vertically but stretches.
 
 ## Credits
 
@@ -47,6 +46,7 @@ In-game saves (the cartridge's EEPROM) are written to `/Shared/Emulation/pm/save
 - **Playdate port**: [Giorgio Pomettini](https://www.giorgiopomettini.eu/).
 - **Graphics assets**: [Noemi Frulio](https://noemifrulio.itch.io/).
 - **FreeBIOS**: Team Pokeme (2009), freeware.
+- **[PDLL library](https://github.com/CrankBoyHQ/pdll) and advice**: Sodium Hydroxide ([NaOH](https://github.com/nstbayless)).
 
 Source code, roadmap and dev notes:
 [github.com/pomettini/pokemini](https://github.com/pomettini/pokemini).
