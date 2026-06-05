@@ -202,12 +202,12 @@ frame = ~33ms = 2.4 PM frames late). If users complain, time-stamp the
 button events and replay them at the right PM frame inside the
 fractional-pacing loop.
 
-### 3g. 3.5x scaling experiment — first pass done
-The Playdate system menu now has `Scale: 3x/3.5x`. `3x` is the stable baseline
-integer scale at 288x192. `3.5x` expands the 96x64 Pokemon Mini framebuffer to
-336x224 with an alternating 3/4-pixel row/column pattern, centered on screen. This is
-still an experiment: inspect readability, shimmer, and performance on device
-before treating it as final.
+### 3g. 3.75x scaling experiment — first pass done
+The Playdate system menu now has `Scale: 3x/3.75x`. `3x` is the stable baseline
+integer scale at 288x192. `3.75x` expands the 96x64 Pokemon Mini framebuffer to
+360x240, filling the screen vertically with an alternating 3/4-pixel column
+pattern. This is still an experiment: inspect readability, shimmer, and
+performance on device before treating it as final.
 
 ## 4. Code/build hygiene
 
@@ -262,7 +262,7 @@ pointer. Could remove the SetVideo call entirely and shave a few KB.
   is ~14% below native on the heaviest ROMs (Togepi), covered in
   NOTES.md. Not a ship blocker (most players won't notice; the games
   that hit it worst are the most demanding ones, where slight slowdown
-  is plausible even on real hardware). Smooth+3.5x is within ~2 fps of
+  is plausible even on real hardware). Smooth+3.75x is within ~2 fps of
   fast+3x after the memory-bandwidth render pass (also in NOTES.md).
 
 ## Suggested order
@@ -282,6 +282,6 @@ A reasonable shipping path:
 9. **1e** — card art when graphics are ready
 10. **1d (Credits)**, **3a**, **3d, 3e, 3f** — in-app credits + per-ROM
     save isolation + polish pass (as time allows)
-11. **3g** — review 3.5x scale readability/performance (very low priority)
+11. **3g** — review 3.75x scale readability/performance (very low priority)
 
 That's roughly 1-2 days of focused work to a v1.0 release from here.

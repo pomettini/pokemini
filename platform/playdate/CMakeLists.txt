@@ -25,14 +25,8 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Debug)
 endif()
 
-# Keep the legacy target/package filename so existing build and release
-# workflows continue to produce PokeMini.pdx. The launcher name and update
-# identity come from Source/pdxinfo.
-set(PLAYDATE_GAME_NAME PokeMini)
-# Device build also produces PokeMini.pdx (no _DEVICE suffix). The two cmake
-# branches (sim/device) are mutually exclusive per build dir, so reusing the
-# same target name is fine.
-set(PLAYDATE_GAME_DEVICE PokeMini)
+set(PLAYDATE_GAME_NAME PlayMini)
+set(PLAYDATE_GAME_DEVICE PlayMini)
 
 project(${PLAYDATE_GAME_NAME} C ASM)
 
@@ -186,7 +180,7 @@ if (TOOLCHAIN STREQUAL "armgcc")
 
     # Device-only packages do not need the simulator dylib. If a simulator
     # build left Source/pdex.dylib behind, pdc would otherwise copy it into
-    # PokeMini.pdx as an unknown file.
+    # PlayMini.pdx as an unknown file.
     add_custom_command(TARGET ${TARGET_NAME} PRE_LINK
         COMMAND ${CMAKE_COMMAND} -E rm -f
             ${CMAKE_CURRENT_SOURCE_DIR}/Source/pdex.dylib)
