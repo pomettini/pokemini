@@ -18,7 +18,7 @@ cmake -S . -B build-device \
 cmake --build build-device --clean-first
 ```
 
-Output: `PokeMini.pdx`. Sideload to device.
+Output: `PlayMini.pdx`. Sideload to device.
 
 ## Simulator build
 
@@ -27,12 +27,19 @@ cmake -S . -B build
 cmake --build build
 ```
 
-Output: `PokeMini.pdx` with `pdex.dylib`. Open in Playdate Simulator.
+Output: `PlayMini.pdx` with `pdex.dylib`. Open in Playdate Simulator.
 
 ## Diagnostic flags
 
 `-DPD_OPCODE_DIAG_BUILD=ON` or `-DPD_PERF_DIAG_BUILD=ON` enable logging.
 Both default OFF. Turn off before shipping.
+
+## PDLL (dev only)
+
+`-DPOKEMINI_PDLL=ON` builds in the [PDLL](https://github.com/CrankBoyHQ/pdll)
+dynamic-linking event hooks, used to hot-reload the simulator dylib during
+development. Default OFF — production builds ship without it so the
+`eventHandler` export matches a plain SDK build. Leave it off for release.
 
 ## Notes
 

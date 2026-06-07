@@ -29,8 +29,13 @@
 #include "PokeMini.h"
 #include "UI.h"
 #include "Video_x1.h"
-#include "pdll.h"
 #include "rom_picker.h"
+
+// PDLL (dynamic-linking event hooks) is a dev-only convenience for the
+// simulator; production builds ship without it. Enable with -DPOKEMINI_PDLL=ON.
+#if POKEMINI_USE_PDLL
+#include "pdll.h"
+#endif
 
 #include "PokeMini_DTCM.h"
 #include "PokeMini_UserStack.h"
@@ -143,7 +148,7 @@ static void pdopdiag_log_and_reset(unsigned int updates) {
 
 // --- Platform menu stub (required by UI.c) ------------------------------
 
-const char *AppName = "PlayMini 0.2.0 Playdate";
+const char *AppName = "PlayMini 0.2.1 Playdate";
 
 int UIItems_PlatformC(int index, int reason);
 TUIMenu_Item UIItems_Platform[] = {PLATFORMDEF_GOBACK, PLATFORMDEF_SAVEOPTIONS,
@@ -1132,18 +1137,24 @@ static int update_first_after_rom_userstack_wrapper(void *userdata) {
 
 // --- Event handler ------------------------------------------------------
 
+#if POKEMINI_USE_PDLL
 #ifdef _WINDLL
 __declspec(dllexport)
 #endif
 int eventHandler(PlaydateAPI *playdate, PDSystemEvent event, uint32_t arg);
 
 PDLL_EXPORT(eventHandler)
+#endif
 
 #ifdef _WINDLL
 __declspec(dllexport)
 #endif
 int eventHandler(PlaydateAPI *playdate, PDSystemEvent event, uint32_t arg) {
+#if POKEMINI_USE_PDLL
   PDLL_EVENT(playdate, event, arg);
+#else
+  (void)arg;
+#endif
 
   if (event == kEventInit) {
     pd = playdate;

@@ -34,6 +34,10 @@ set(POKEMINI_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../..)
 
 option(PD_OPCODE_DIAG_BUILD "Count Minx opcode frequency on device" OFF)
 option(PD_PERF_DIAG_BUILD "Measure Playdate update phase timings on device" OFF)
+# Dev-only: PDLL dynamic-linking event hooks (CrankBoyHQ/pdll), used to
+# hot-reload the simulator dylib. Production builds ship without it so the
+# eventHandler export path matches a plain SDK build. See README credits.
+option(POKEMINI_PDLL "Build with PDLL dynamic-linking event hooks (dev only)" OFF)
 # Experimental: place PM_RAM (8 KB) in DTCM at 0x20000000 via linker section
 # attribute. Direct hardware-level zero-wait-state placement, no stack
 # relocation. Risk: stack collision if firmware grows stack into the bottom
@@ -99,8 +103,13 @@ target_include_directories(${TARGET_NAME} PRIVATE
     ${POKEMINI_ROOT}/resource
     ${POKEMINI_ROOT}/freebios
     ${CMAKE_CURRENT_SOURCE_DIR}/libs/pd-rom-picker/src
-    ${CMAKE_CURRENT_SOURCE_DIR}/libs/pdll
 )
+
+if (POKEMINI_PDLL)
+    target_compile_definitions(${TARGET_NAME} PRIVATE POKEMINI_USE_PDLL=1)
+    target_include_directories(${TARGET_NAME} PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/libs/pdll)
+endif()
 
 target_compile_definitions(${TARGET_NAME} PRIVATE
     NO_DIRS
