@@ -148,7 +148,7 @@ static void pdopdiag_log_and_reset(unsigned int updates) {
 
 // --- Platform menu stub (required by UI.c) ------------------------------
 
-const char *AppName = "PlayMini 0.2.1 Playdate";
+const char *AppName = "PlayMini 0.2.2 Playdate";
 
 int UIItems_PlatformC(int index, int reason);
 TUIMenu_Item UIItems_Platform[] = {PLATFORMDEF_GOBACK, PLATFORMDEF_SAVEOPTIONS,
