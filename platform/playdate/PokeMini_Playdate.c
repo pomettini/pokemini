@@ -658,6 +658,18 @@ void setup_eeprom_path(const char *rom_path);
 int pd_load_eeprom(const char *filename);
 int pd_save_eeprom(const char *filename);
 
+// Persist the current ROM's EEPROM to flash, but only if the game wrote to it
+// since the last save. Safe to call any time — a no-op when nothing changed or
+// no ROM is loaded. This is the single choke point for every save trigger
+// (return-to-picker, ROM switch, pause, terminate); calling it on each is what
+// guarantees a high score survives whichever way the player leaves the game.
+static void flush_eeprom(void) {
+  if (PokeMini_EEPROMWritten && StringIsSet(CommandLine.eeprom_file)) {
+    PokeMini_SaveEEPROMFile(CommandLine.eeprom_file);
+    PokeMini_EEPROMWritten = 0;
+  }
+}
+
 // --- Settings -----------------------------------------------------------
 
 // Tiny key=value text file so adding/removing keys later doesn't break old
@@ -834,12 +846,10 @@ static void eeprom_deferred_load_and_sync(void) {
 // BIOS path leaves SYS_CTRL3 in a state where the cart can stall before
 // enabling the PRC 72 Hz interrupt), then ApplyChanges to commit any tweaks.
 static void start_emulation_with_rom(const char *path) {
-  // Flush current EEPROM before switching ROMs.
-  if (app_mode == MODE_EMULATOR && PokeMini_EEPROMWritten &&
-      StringIsSet(CommandLine.eeprom_file)) {
-    PokeMini_SaveEEPROMFile(CommandLine.eeprom_file);
-    PokeMini_EEPROMWritten = 0;
-  }
+  // Flush the outgoing ROM's EEPROM before we overwrite eeprom_file and wipe
+  // the buffer below. Usually already saved by return_to_picker()/kEventPause,
+  // but this is the last line of defense before the data is gone.
+  flush_eeprom();
 
   if (path == NULL) {
     pd->system->logToConsole("%s: starting with FreeBIOS only (no ROM)",
@@ -902,6 +912,9 @@ static void start_emulation_with_rom(const char *path) {
 }
 
 static void return_to_picker(void) {
+  // Persist the current game's save before leaving it — the player may launch
+  // a different ROM (which wipes the EEPROM buffer) or quit from the picker.
+  flush_eeprom();
   app_mode = MODE_PICKER;
   rebuild_system_menu();
   stop_audio_source();
@@ -1238,6 +1251,12 @@ int eventHandler(PlaydateAPI *playdate, PDSystemEvent event, uint32_t arg) {
 
   } else if (event == kEventPause) {
     emu_paused = 1;
+    // Persist the save here too: kEventPause is the one lifecycle event that
+    // reliably fires whenever the player leaves the game (opening the system
+    // menu, locking, or powering off), whereas kEventTerminate is not
+    // guaranteed on a hard power-off. Guarded by the dirty flag inside
+    // flush_eeprom(), so it only touches flash when the game actually wrote.
+    flush_eeprom();
     // Release every PM key so no button stays stuck when the player returns.
     // The Playdate runtime stops calling update() while the menu is up, so
     // held-button state from handle_input() would otherwise persist forever.
